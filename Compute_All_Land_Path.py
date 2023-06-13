@@ -2,6 +2,7 @@ from CPP_Planner import CPP_Planner_Kit, CPP_Algorithms
 import numpy as np
 import matplotlib.pyplot as plt
 import geopandas as gpd
+import datetime
 
 """
 用来一次性规划所有地块的路径规划，并显示到图上
@@ -13,7 +14,7 @@ def get_all_land_path():
     print("田块的个数: ", num_land)
 
     all_land_paths = []
-    along_long_edge = True
+    along_long_edge = False
     # 遍历所有的地块，同时保存其路径
     for index in range(num_land):
         single_land = CPP_Planner_Kit.get_single_shp(all_land, index)
@@ -30,6 +31,7 @@ def get_all_land_path():
     plt.grid(True)
     # 保存或展示
     # plt.show()
-    plt.savefig('Saved_Result/CPP.pdf')
+    now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    plt.savefig('Saved_Result/CPP_{}.pdf'.format(now))
 
 get_all_land_path()
