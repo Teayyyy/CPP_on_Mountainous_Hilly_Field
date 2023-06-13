@@ -20,6 +20,8 @@ plt.figure(figsize=(8, 6))
 fig, ax = plt.subplots()
 color = ['r', 'b']
 # scaled_polygon.plot(ax=ax, color='b')
+angle = CPP_Planner_Kit.get_land_MABR_angle(scaled_polygon[0])
+# single_land = single_land.rotate(-angle, 'centroid')
 single_land.plot(ax=ax, color='b')
 path_line.plot(ax=ax, color='y', linewidth=1)
 # plt.plot(*zip(*path_points), 'y-', label='Coverage Path')
