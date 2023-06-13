@@ -39,18 +39,18 @@ class CPP_Planner_Kit:
         return gpd.GeoDataFrame([all_land.iloc[ind]], crs=all_land.crs)
 
     @staticmethod
-    def get_land_MABR_angle(temp_land: gpd.GeoDataFrame) -> float:
+    def get_land_MABR_angle(temp_land) -> float:
         """
         用于计算当前单个田块的最小内接矩形的长边角度，后期用于将单个田块水平便于路径规划
         :param temp_land: 单个田块，如果不是单个田块，就不执行后面的操作
         :return: 田块的角度
         """
-        if len(temp_land) > 1:
-            print("田块超过了一个！轻输入单个田块\n 如果需要调用单个田块，请调用 get_string_shp()")
-            return
-        # 找到最小内接矩形， minimum_rotated_rectangle
-        temp_land_polygon = temp_land.geometry[0]
-        mabr = temp_land_polygon.minimum_rotated_rectangle
+        # if len(temp_land) > 1:
+        #     print("田块超过了一个！轻输入单个田块\n 如果需要调用单个田块，请调用 get_string_shp()")
+        #     return
+        # # 找到最小内接矩形， minimum_rotated_rectangle
+        # temp_land_polygon = temp_land.geometry[0]
+        mabr = temp_land.minimum_rotated_rectangle
         # 计算长边
         longest_edge = None
         max_length = -1
@@ -99,9 +99,11 @@ class CPP_Algorithms:
         land_polygon = land.iloc[0].geometry
         land_centroid = land_polygon.centroid  # 当前地块的原始坐标位置，保存的中心位置，方便后期镜像回退
         # 获取角度
-        land_angle = CPP_Planner_Kit.get_land_MABR_angle(land_polygon)
+        # land_angle = CPP_Planner_Kit.get_land_MABR_angle(land_polygon)
+        land_angle = 0
         # 置于水平，在后面的路径规划算法中，优先使用该旋转的地块来进行路径规划
-        rotated_polygon = affinity.rotate(land_polygon, land_angle)
+        rotated_polygon = affinity.rotate(land_polygon, -land_angle)
+        # rotated_polygon = affinity.rotate(land_polygon, 0)
         print("地块已置于水平，开始路径规划...")
 
         # 计算多边形的边界框
@@ -115,7 +117,7 @@ class CPP_Algorithms:
         while begin_y <= max_y:
             # 计算当前扫描线于多边形的焦点
             intersections = []
-            for i in range(len(rotated_polygon.coords) - 1):
+            for i in range(len(rotated_polygon.exterior.coords) - 1):
                 edge = rotated_polygon.exterior.coords[i]
                 next_edge = rotated_polygon.exterior.coords[i + 1]
 
@@ -128,7 +130,7 @@ class CPP_Algorithms:
             # 遍历交点，生成路径点
             for i in range(0, len(intersections), 2):
                 start_x = intersections[i]
-                end_x = intersections[i + 1] if i+1 < len(intersections) else max_x
+                end_x = intersections[i + 1] if i + 1 < len(intersections) else max_x
 
                 # 生成当前行的路径点
                 row_points = np.arange(start_x, end_x, step_size)
@@ -141,10 +143,11 @@ class CPP_Algorithms:
                     path_points.extend([x, begin_y] for x in row_points)
             # 更新扫描线的位置
             begin_y += step_size
-
-        return path_points
+        path_line = LineString(path_points)
+        path_line = gpd.GeoDataFrame(geometry=[path_line], crs=land.crs)
+        return path_line
+        # return path_points
         # end while
-
 
 
 # end class CPP_Algorithms ------------------------------------------------------------
@@ -156,6 +159,5 @@ class CPP_Algorithms:
 
 class Algorithm_Optimizers:
     pass
-
 
 # end class Algorithm_Optimizers ------------------------------------------------------------
