@@ -1,7 +1,8 @@
 import numpy as np
-import matplotlib as plt
+import matplotlib.pyplot as plt
 from shapely.geometry import Polygon, LineString
 from shapely import affinity
+from shapely import ops
 import geopandas as gpd
 import math
 
@@ -67,6 +68,115 @@ class CPP_Planner_Kit:
                                         longest_edge.coords[1][0] - longest_edge.coords[0][0]))
         print("当前田块角度：", angle)
         return angle
+
+    @staticmethod
+    def extend_shapely_line(line: LineString, scale_factor=10, extend_mode=2):
+        """
+        用于延长一根 shapely 中的 LineString 线，延长的尺度为 scale_factor 倍
+        :param line: 需要延长的线段，一定要是 shapely LineString 类型
+        :param scale_factor: 缩放的倍数（通常是放大），若是要缩小，则为小数，默认为 10
+        :param extend_mode: 延长的模式，0 为线段的“前一个点”，1 为线段的“后一个”点，2 为双向延长（默认）
+                注意：当分割线长度没有超过多边形的边时，分割不会进行
+        :return: 延长后的线段
+        """
+        # 检查当前的 line 是否是 LineString 类型
+        if not isinstance(line, LineString):
+            print("当前的 line 不是 LineString 类型")
+            return
+        print("Extending lines...")
+        # 获取线段的起始点和结束点的坐标
+        x1, y1 = line.coords[0]
+        x2, y2 = line.coords[1]
+        # 计算线段的方向向量
+        dx = x2 - x1
+        dy = y2 - y1
+        # 缩放
+        extended_dx = dx * scale_factor
+        extended_dy = dy * scale_factor
+        # 按照延长的方式来选择
+        extended_x1 = x1
+        extended_y1 = y1
+        extended_x2 = x2
+        extended_y2 = y2
+        if extend_mode is 0 or extend_mode is 2:
+            extended_x1 -= extended_dx
+            extended_y1 -= extended_dy
+        if extend_mode is 1 or extend_mode is 2:
+            extended_x2 += extended_dx
+            extended_y2 += extended_dy
+
+        return LineString([(extended_x1, extended_y1), (extended_x2, extended_y2)])
+
+
+    @staticmethod
+    def split_polygon_through_1edge(split_polygon: Polygon, split_line: LineString, line_scale_factor=10):
+        """
+        将一个多边形（田块）按照其上的一条边分割，分割成多个多边形
+        在分割的时候，可以直接输入的边，会被自动延长10倍，当然也可以手动设定
+        :param split_polygon: 被分割的多边形，一定是 shapely Polygon 类型
+        :param split_line: 用于分割的线，一定是 shapely LineString 类型
+        :param line_scale_factor: 分割线段缩放的大小，和 extend_shapely_line() 为同一个变量
+                注意：当分割线长度没有超过多边形的边时，分割不会进行
+        :return:
+        """
+        # 获取当前多边形的凸包上的所有的线，存储成单独的一根根线
+        convex_hull_lines = []
+        for i in range(len(split_polygon.convex_hull.exterior.coords) - 1):
+            convex_hull_lines.append(LineString([split_polygon.convex_hull.exterior.coords[i],
+                                                 split_polygon.convex_hull.exterior.coords[i+1]]))
+        # 获取多边形本身的所有线，同样存储为单独的一根根线
+        polygon_lines = []
+        for i in range(len(split_polygon.exterior.coords) - 1):
+            polygon_lines.append(LineString([split_polygon.exterior.coords[i], split_polygon.exterior.coords[i+1]]))
+
+        # 获取所有不再凸包上的线
+        not_on_convex_hull_lines = []
+        for polygon_line in polygon_lines:
+            if polygon_line not in convex_hull_lines:
+                not_on_convex_hull_lines.append(polygon_line)
+
+        print("Num of convex_hull: ", len(convex_hull_lines))
+        print("Num of Polygon lines: ", len(polygon_lines))
+        print("Not on Convex: ", len(not_on_convex_hull_lines))
+
+        # 开始处理线以分割多边形
+        split_line = CPP_Planner_Kit.extend_shapely_line(split_line)
+
+        already_split_polygon = ops.split(split_polygon, split_line)
+        print("当前分割多边形个数: ", len(already_split_polygon.geoms))
+        return already_split_polygon
+
+    @staticmethod
+    def show_polygon_edge_length(polygon, color='b', text_color='w'):
+        """
+        显示当前多边形每一条边的长度，必须保证仅输入一个多边形
+        :param polygon: 显示长度的多边形
+        :param color: 多边形显示的颜色，默认为蓝色
+        :param text_color: 文字显示颜色，默认为白色
+            * 颜色的显示参考 matplotlib，都是加了一层借口 :D
+        """
+        x, y = polygon.exterior.xy
+        # 存贮坐标的表
+        coords_x = [temp_x for temp_x in x]
+        coords_x.append(x[0])
+        coords_y = [temp_y for temp_y in y]
+        coords_y.append(y[0])
+
+        # 计算长度
+        edge_lengths = []
+        for i in range(len(coords_x) - 1):
+            length = ((coords_x[i] - coords_x[i+1])**2 + (coords_y[i] - coords_y[i+1])**2) ** 0.5
+            edge_lengths.append(length)
+
+        # 绘制图形
+        plt.plot(x, y, '{}-'.format(color), label="Polygon")
+        for i, length in enumerate(edge_lengths):
+            # 显示文字的位置为中点
+            edge_midpoint = [(coords_x[i] + coords_x[i+1])/2, (coords_y[i] + coords_y[i+1])/2]
+            plt.text(edge_midpoint[0], edge_midpoint[1], f'{length:.2f}', ha='center', va='center')
+        plt.xlabel("Longitude"), plt.ylabel("Latitude")
+        plt.title("Unit: meter(s)")
+        plt.show()
 
 
 # end class CPP_Planner_Kit ------------------------------------------------------------
@@ -171,7 +281,7 @@ class CPP_Algorithms:
 
         # 将 land 中的 polygon 提取出来，保证一次只有一个地块，随即获取相关的信息
         land_polygon = land.iloc[0].geometry
-        land_centroid = land_polygon.centroid  # 当前地块的原始坐标位置，保存的中心位置，方便后期镜像回退
+        land_centroid = land_polygon.centroid  # 当前地块的原始坐标位置，保存的中心位置，方便后期反向旋转回退
         if along_long_edge:
             land_angle = 0
         else:
