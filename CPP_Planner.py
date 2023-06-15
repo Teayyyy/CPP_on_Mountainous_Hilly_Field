@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import shapely.geometry
 from shapely.geometry import Polygon, LineString
 from shapely import affinity
 from shapely import ops
@@ -98,15 +99,14 @@ class CPP_Planner_Kit:
         extended_y1 = y1
         extended_x2 = x2
         extended_y2 = y2
-        if extend_mode is 0 or extend_mode is 2:
+        if extend_mode == 0 or extend_mode == 2:
             extended_x1 -= extended_dx
             extended_y1 -= extended_dy
-        if extend_mode is 1 or extend_mode is 2:
+        if extend_mode == 1 or extend_mode == 2:
             extended_x2 += extended_dx
             extended_y2 += extended_dy
 
         return LineString([(extended_x1, extended_y1), (extended_x2, extended_y2)])
-
 
     @staticmethod
     def split_polygon_through_1edge(split_polygon: Polygon, split_line: LineString, line_scale_factor=10):
@@ -119,15 +119,49 @@ class CPP_Planner_Kit:
                 注意：当分割线长度没有超过多边形的边时，分割不会进行
         :return:
         """
+        # # 获取当前多边形的凸包上的所有的线，存储成单独的一根根线
+        # convex_hull_lines = []
+        # for i in range(len(split_polygon.convex_hull.exterior.coords) - 1):
+        #     convex_hull_lines.append(LineString([split_polygon.convex_hull.exterior.coords[i],
+        #                                          split_polygon.convex_hull.exterior.coords[i+1]]))
+        # # 获取多边形本身的所有线，同样存储为单独的一根根线
+        # polygon_lines = []
+        # for i in range(len(split_polygon.exterior.coords) - 1):
+        #     polygon_lines.append(LineString([split_polygon.exterior.coords[i], split_polygon.exterior.coords[i+1]]))
+        #
+        # # 获取所有不再凸包上的线
+        # not_on_convex_hull_lines = []
+        # for polygon_line in polygon_lines:
+        #     if polygon_line not in convex_hull_lines:
+        #         not_on_convex_hull_lines.append(polygon_line)
+
+        # print("Num of convex_hull: ", len(convex_hull_lines))
+        # print("Num of Polygon lines: ", len(polygon_lines))
+        # print("Not on Convex: ", len(not_on_convex_hull_lines))
+
+        # 开始处理线以分割多边形
+        split_line = CPP_Planner_Kit.extend_shapely_line(split_line, scale_factor=line_scale_factor)
+
+        already_split_polygon = ops.split(split_polygon, split_line)
+        print("当前分割多边形个数: ", len(already_split_polygon.geoms))
+        return already_split_polygon
+
+    @staticmethod
+    def get_non_convex_edges(polygon: shapely.geometry.Polygon):
+        """
+        输入一个多边形，返回其非凸包上的边
+        :param polygon: 输入的多边形
+        :return: 非凸包上的边, 为存储了所有非凸包边的列表 [LineString]
+        """
         # 获取当前多边形的凸包上的所有的线，存储成单独的一根根线
         convex_hull_lines = []
-        for i in range(len(split_polygon.convex_hull.exterior.coords) - 1):
-            convex_hull_lines.append(LineString([split_polygon.convex_hull.exterior.coords[i],
-                                                 split_polygon.convex_hull.exterior.coords[i+1]]))
+        for i in range(len(polygon.convex_hull.exterior.coords) - 1):
+            convex_hull_lines.append(LineString([polygon.convex_hull.exterior.coords[i],
+                                                 polygon.convex_hull.exterior.coords[i + 1]]))
         # 获取多边形本身的所有线，同样存储为单独的一根根线
         polygon_lines = []
-        for i in range(len(split_polygon.exterior.coords) - 1):
-            polygon_lines.append(LineString([split_polygon.exterior.coords[i], split_polygon.exterior.coords[i+1]]))
+        for i in range(len(polygon.exterior.coords) - 1):
+            polygon_lines.append(LineString([polygon.exterior.coords[i], polygon.exterior.coords[i + 1]]))
 
         # 获取所有不再凸包上的线
         not_on_convex_hull_lines = []
@@ -139,12 +173,7 @@ class CPP_Planner_Kit:
         print("Num of Polygon lines: ", len(polygon_lines))
         print("Not on Convex: ", len(not_on_convex_hull_lines))
 
-        # 开始处理线以分割多边形
-        split_line = CPP_Planner_Kit.extend_shapely_line(split_line)
-
-        already_split_polygon = ops.split(split_polygon, split_line)
-        print("当前分割多边形个数: ", len(already_split_polygon.geoms))
-        return already_split_polygon
+        return not_on_convex_hull_lines
 
     @staticmethod
     def show_polygon_edge_length(polygon, color='b', text_color='w'):
@@ -165,18 +194,44 @@ class CPP_Planner_Kit:
         # 计算长度
         edge_lengths = []
         for i in range(len(coords_x) - 1):
-            length = ((coords_x[i] - coords_x[i+1])**2 + (coords_y[i] - coords_y[i+1])**2) ** 0.5
+            length = ((coords_x[i] - coords_x[i + 1]) ** 2 + (coords_y[i] - coords_y[i + 1]) ** 2) ** 0.5
             edge_lengths.append(length)
 
         # 绘制图形
         plt.plot(x, y, '{}-'.format(color), label="Polygon")
         for i, length in enumerate(edge_lengths):
             # 显示文字的位置为中点
-            edge_midpoint = [(coords_x[i] + coords_x[i+1])/2, (coords_y[i] + coords_y[i+1])/2]
+            edge_midpoint = [(coords_x[i] + coords_x[i + 1]) / 2, (coords_y[i] + coords_y[i + 1]) / 2]
             plt.text(edge_midpoint[0], edge_midpoint[1], f'{length:.2f}', ha='center', va='center')
         plt.xlabel("Longitude"), plt.ylabel("Latitude")
         plt.title("Unit: meter(s)")
         plt.show()
+
+    @staticmethod
+    def show_geometry_collection(collections: shapely.geometry.GeometryCollection, color='r'):
+        """
+        显示 shapely GeometryCollection，就是为了方便，默认的显示颜色是红色
+        :param collections: 需要显示的几何集合
+        :param color: 显示的颜色
+        """
+        fig, ax = plt.subplots()
+        for geom in collections.geoms:
+            x, y = geom.exterior.xy
+            ax.plot(x, y, color)
+
+    @staticmethod
+    def is_polygon_convex_area_same(polygon: Polygon, tolerance=0.1) -> bool:
+        """
+        判断当前的多边形是否*接近*凸边形，判断的依据为两者面积只差和原多边形的面积只比，如果超过了 10% 则判定为不相同（非凸边形）
+        :param polygon: 原多边形
+        :param tolerance: （凸包面积 - 原多边形面积）/ 原多边形面积 的值是否超过 tolerance（百分比）
+        :return: bool 是否相等
+        """
+        convex = polygon.convex_hull
+        if (convex.area - polygon.area) / polygon.area < tolerance:
+            return True
+        else:
+            return False
 
 
 # end class CPP_Planner_Kit ------------------------------------------------------------
@@ -259,7 +314,8 @@ class CPP_Algorithms:
         # end while
 
     @staticmethod
-    def scanline_algorithm_single_no_turn(land: gpd.GeoDataFrame, step_size: float, along_long_edge=False):
+    def scanline_algorithm_single_no_turn(land: gpd.GeoDataFrame, step_size: float, along_long_edge=False)\
+            -> gpd.GeoDataFrame:
         """
         *** 这是上面的算法的改进，取消了转向策略，但是需要将其作为一个单独的问题点来解决
         将单个地块中的路径按照 “扫描线” 的方法做全覆盖路径规划
@@ -282,7 +338,7 @@ class CPP_Algorithms:
         # 将 land 中的 polygon 提取出来，保证一次只有一个地块，随即获取相关的信息
         land_polygon = land.iloc[0].geometry
         land_centroid = land_polygon.centroid  # 当前地块的原始坐标位置，保存的中心位置，方便后期反向旋转回退
-        if along_long_edge:
+        if not along_long_edge:
             land_angle = 0
         else:
             land_angle = CPP_Planner_Kit.get_land_MABR_angle(land_polygon)  # 获取角度
@@ -320,6 +376,7 @@ class CPP_Algorithms:
         # 创建 GeoDataFrame 对象
         path_gdf = gpd.GeoDataFrame(geometry=path_lines, crs=land.crs)
 
+        print("这次规划完成！")
         return path_gdf
 
 
