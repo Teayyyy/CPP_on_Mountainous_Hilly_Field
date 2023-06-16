@@ -6,6 +6,7 @@ from shapely import affinity
 from shapely import ops
 import geopandas as gpd
 import math
+import queue
 
 """
 这个类包含了所有的已测试成功的路径规划的算法、处理方式等
@@ -147,7 +148,7 @@ class CPP_Planner_Kit:
         return already_split_polygon
 
     @staticmethod
-    def get_non_convex_edges(polygon: shapely.geometry.Polygon):
+    def get_non_convex_edges(polygon: shapely.geometry.Polygon) -> [LineString]:
         """
         输入一个多边形，返回其非凸包上的边
         :param polygon: 输入的多边形
@@ -233,6 +234,62 @@ class CPP_Planner_Kit:
         else:
             return False
 
+    @staticmethod
+    def split_polygon_by_largest_area(polygon: Polygon, tolerance=0.03) -> [Polygon]:
+        """
+        将一个田块进行凸分割，分割的线是当前田块的非凸边，是否采用当前边作为分割边的依据是当前边所分开的凸边形是否是所能够分出的最大凸边形
+        * 使用面积差判断凸边形的依据：减少部分田块边缘“不太平整”时，对多边形分割的影响，可以参考 test_split_convex_2.ipynb
+        :param polygon: 被分割的多边形（田块），如果田块本身就是凸边形，那么会直接返回当前凸边形
+        :param tolerance: 由于本方法判断一个多边形是否为凸边形的原则是：当前多边形和其凸包的面积差是否超过了阈值 tolerance，超过则不是凸边
+               形，不超过就当作当前边是凸边形
+        :return: list[Polygon]
+        """
+        print(f"split_polygon_by_largest_area： 开始进行田块分割，当前误差范围 tolerance = {tolerance}")
+        # 存放凸边形 和 未分割为凸边形的凹边形，因为需要循环处理知道当前的多边形倍全部分为 误差范围内的凸边形，因此用队列维护
+        convex = []
+        concave = queue.Queue()
+        # 首先判断当前的多边形是否满足 凸边形，满足就可以不用进行后面的凸边形分割了
+        if CPP_Planner_Kit.is_polygon_convex_area_same(polygon, tolerance=tolerance):
+            convex.append(polygon)
+        else:
+            concave.put(polygon)
+
+        # 思路是，将所有的凹边形都处理为凸边形位置
+        while not concave.empty():
+            temp_concave = concave.get()
+            split_group = []  # 用于存放所有多边形的非凸边分割后的多边形结果，其中一个元素就是一条边的分割结果
+            # 尝试将凹边形按照不同的边分开
+            non_convex_edges = CPP_Planner_Kit.get_non_convex_edges(temp_concave)
+            for edge in non_convex_edges:
+                split_group.append(CPP_Planner_Kit.split_polygon_through_1edge(temp_concave, edge))
+
+            # 保存当前找到的分割结果中，分出的最大的凸边形的面积，以及其所在组的索引
+            group_wise_max_area = 0
+            group_wise_max_index = -1
+
+            # 寻找每一个通过非凸边分出的组，其内的最大凸边形的面积，意在找到当前所有非凸边中能够分出的最大凸边形
+            for i in range(len(split_group)):
+                group_inside_max_area = 0
+                group = split_group[i]
+                for temp_geom in group.geoms:
+                    # 找到的最大面积前首先要保证当前的多边形是 误差允许范围内的多边形
+                    if CPP_Planner_Kit.is_polygon_convex_area_same(temp_geom, tolerance=tolerance):
+                        group_inside_max_area = max(group_inside_max_area, temp_geom.area)
+                # 找到组内的最大面积后，还需和组间的最大面积比较，同时保存索引
+                if group_inside_max_area > group_wise_max_area:
+                    group_wise_max_area = group_inside_max_area
+                    group_wise_max_index = i
+
+            biggest_split = split_group[group_wise_max_index]  # 获取最大分割
+            # 将所有的凸边形保存，同时 非凸边形 继续参与分割，直到没有凸边形位置
+            for temp_polygon in biggest_split.geoms:
+                if CPP_Planner_Kit.is_polygon_convex_area_same(temp_polygon, tolerance=tolerance):
+                    convex.append(temp_polygon)
+                else:
+                    concave.put(temp_polygon)
+        print("田块分割结束...")
+        return convex
+
 
 # end class CPP_Planner_Kit ------------------------------------------------------------
 
@@ -314,7 +371,7 @@ class CPP_Algorithms:
         # end while
 
     @staticmethod
-    def scanline_algorithm_single_no_turn(land: gpd.GeoDataFrame, step_size: float, along_long_edge=False)\
+    def scanline_algorithm_single_no_turn(land: gpd.GeoDataFrame, step_size: float, along_long_edge=False) \
             -> gpd.GeoDataFrame:
         """
         *** 这是上面的算法的改进，取消了转向策略，但是需要将其作为一个单独的问题点来解决
