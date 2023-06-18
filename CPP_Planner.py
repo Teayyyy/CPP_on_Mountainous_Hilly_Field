@@ -476,7 +476,8 @@ class CPP_Algorithms:
         path_lines = []
 
         # 迭代扫描线
-        for y in np.arange(min_y, max_y + step_size, step_size):
+        for y in np.arange(min_y+0.1, max_y + step_size-0.1, step_size):
+        # for y in np.arange(min_y, max_y - 1, step_size):
             row_points = []
             for i in range(len(rotated_polygon.exterior.coords) - 1):
                 edge = rotated_polygon.exterior.coords[i]
@@ -498,7 +499,7 @@ class CPP_Algorithms:
                     row_points[max_x_index][0] = row_points[max_x_index][0] - head_land_width
                 path_line = LineString(row_points)
                 # 尝试：仅保留固定长度以上的耕作路径?
-                if path_line.length > 5:
+                if path_line.length > head_land_width:
                     path_line = affinity.rotate(path_line, land_angle, origin=land_centroid)
                     path_lines.append(path_line)
 
@@ -507,9 +508,11 @@ class CPP_Algorithms:
         path_gdf = gpd.GeoDataFrame(geometry=path_lines, crs=land.crs)
         # 生成地头区域，通过创建耕作路径的缓冲区，来找到地块的区域，最后通过差集来得到地头区域
         print("生成地头区域...")
-        path_buffer_1 = path_gdf.buffer(step_size + 0.4, single_sided=True).unary_union
-        path_buffer_2 = path_gdf.buffer(-(step_size + 0.4), single_sided=True).unary_union
-        path_area_union = Polygon(path_buffer_1.union(path_buffer_2))
+        path_buffer_1 = path_gdf.buffer(step_size + 0.2, single_sided=True).unary_union
+        path_buffer_2 = path_gdf.buffer(-(step_size + 0.2), single_sided=True).unary_union
+        path_buffer = gpd.GeoDataFrame(geometry=[path_buffer_1, path_buffer_2], crs=land.crs)
+        path_area_union = path_buffer.unary_union
+        # path_area_union = Polygon(path_buffer_1.union(path_buffer_2))
         headland_area = land_polygon.difference(path_area_union)
         headland_gdf = gpd.GeoDataFrame(geometry=[headland_area], crs=land.crs)
         print("这次规划完成！")
