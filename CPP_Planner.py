@@ -290,6 +290,19 @@ class CPP_Planner_Kit:
         print("田块分割结束...")
         return convex
 
+    @staticmethod
+    def get_largest_multipolygon(multipolygon: shapely.MultiPolygon) -> Polygon:
+        """
+        将一个 multipolygon 中最大的 polygon 找出并返回
+        :param multipolygon
+        :return: 最大的多边形
+        """
+        # 分解出单独的 polygon
+        polygons = [x for x in multipolygon.geoms]
+        polygons_area = [x.area for x in polygons]
+        return polygons[polygons_area.index(max(polygons_area))]
+        pass
+
 
 # end class CPP_Planner_Kit ------------------------------------------------------------
 
@@ -476,8 +489,8 @@ class CPP_Algorithms:
         path_lines = []
 
         # 迭代扫描线
-        for y in np.arange(min_y+0.1, max_y + step_size-0.1, step_size):
-        # for y in np.arange(min_y, max_y - 1, step_size):
+        for y in np.arange(min_y + 0.1, max_y + step_size - 0.1, step_size):
+            # for y in np.arange(min_y, max_y - 1, step_size):
             row_points = []
             for i in range(len(rotated_polygon.exterior.coords) - 1):
                 edge = rotated_polygon.exterior.coords[i]
@@ -503,7 +516,6 @@ class CPP_Algorithms:
                     path_line = affinity.rotate(path_line, land_angle, origin=land_centroid)
                     path_lines.append(path_line)
 
-
         # 创建 GeoDataFrame 对象
         path_gdf = gpd.GeoDataFrame(geometry=path_lines, crs=land.crs)
         # 生成地头区域，通过创建耕作路径的缓冲区，来找到地块的区域，最后通过差集来得到地头区域
@@ -514,7 +526,13 @@ class CPP_Algorithms:
         path_area_union = path_buffer.unary_union
         # path_area_union = Polygon(path_buffer_1.union(path_buffer_2))
         headland_area = land_polygon.difference(path_area_union)
-        headland_gdf = gpd.GeoDataFrame(geometry=[headland_area], crs=land.crs)
+
+        # 由于多边形在计算机图形中本身就有误差，因此需要将一些零碎的小块删除，保留最大的作为地块即可
+        if type(headland_area) == Polygon:
+            headland_area = shapely.MultiPolygon([headland_area])
+        headland_area = CPP_Planner_Kit.get_largest_multipolygon(headland_area)
+
+        headland_gdf = gpd.GeoDataFrame(geometry=[headland_area.convex_hull], crs=land.crs)
         print("这次规划完成！")
         return path_gdf, headland_gdf
 
@@ -526,7 +544,33 @@ class CPP_Algorithms:
 """
 
 
-class Algorithm_Optimizers:
+class CPP_Algorithm_Optimizers:
+    @staticmethod
+    def gen_path_with_minimum_headland_area(land: gpd.GeoDataFrame, step_size: float, along_long_edge=True,
+                                            head_land_width=0):
+        """
+        对当前地块进行路径规划，使用扫描线算法，每一次输入的地块保证“接近”凸边形，输出带有 地头 的路径规划算法
+        * 耕作路径为当前地块的 MABR 的长边方向
+        * 地块为当前耕作路径两端之一，保证输出较小的地头区域
+        :param land: 进行路径规划的地块，最好是简单的多边形，凸边形或是接近凸边形
+        :param step_size: 机械耕作的宽度，即每一根路径的间隔
+        :param along_long_edge: 是否沿着长边进行路径规划，判断长边的依据为当前多边形的最小外接矩形（MABR），否则默认沿着“水平方向”
+        :param head_land_width: 生成地头的宽度，目前仅能够固定宽度生成地头
+        :return: 耕作路径、地头区域（面积最小）
+        """
+        # 首先获取两侧的分别的地头
+        path_1, headland_1 = CPP_Algorithms.scanline_algorithm_single_with_headland(land, step_size, along_long_edge,
+                                                                                    head_land_width=head_land_width,
+                                                                                    headland='left')
+        path_2, headland_2 = CPP_Algorithms.scanline_algorithm_single_with_headland(land, step_size, along_long_edge,
+                                                                                    head_land_width=head_land_width,
+                                                                                    headland='right')
+        if headland_1.geometry.area[0] > headland_2.geometry.area[0]:
+            return path_2, headland_2
+        else:
+            return path_1, headland_1
+        pass
+
     pass
 
 
