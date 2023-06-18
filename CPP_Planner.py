@@ -533,6 +533,8 @@ class CPP_Algorithms:
         headland_area = CPP_Planner_Kit.get_largest_multipolygon(headland_area)
 
         headland_gdf = gpd.GeoDataFrame(geometry=[headland_area.convex_hull], crs=land.crs)
+        # 保证当前的地头生成的区域仅在地块内
+        headland_gdf = headland_gdf.intersection(land)
         print("这次规划完成！")
         return path_gdf, headland_gdf
 
