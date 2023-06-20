@@ -301,7 +301,35 @@ class CPP_Planner_Kit:
         polygons = [x for x in multipolygon.geoms]
         polygons_area = [x.area for x in polygons]
         return polygons[polygons_area.index(max(polygons_area))]
-        pass
+
+    @staticmethod
+    def get_corrected_swath_width(swath_width: float, slope: float):
+        """
+        获取修正后的耕作宽度，由于我们在路径规划的时候，仅考虑了水平的经纬度，因此需要利用公式进行修正
+        :param swath_width 原来耕地的宽度，由于是坡度所以不可以直接使用经纬度来规划，需要通过坡度来修正其原本的路径在水平方向的投影
+        :param slope 坡度大小
+        :return 修正后的垄的宽度
+        """
+        return swath_width * math.cos(math.radians(slope))
+
+    @staticmethod
+    def get_path_bound(paths: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+        """
+        将原来规划好的路径，提取出其边缘点，组成其外包多边形，注意这里不是取的 convex_hull
+        :param paths: 路径点集合
+        :return: 路径外包多边形的 gpd
+        """
+        path_points = paths['geometry'].apply(lambda line: [line.coords[0], line.coords[-1]])
+        path_points_side1 = []
+        path_points_side2 = []
+        # 将两端的点分别保存
+        for point in path_points:
+            path_points_side1.append(point[0])
+            path_points_side2.append(point[1])
+        # 将第二组点反向保存，模拟“旋转一圈遍历点”
+        path_points_side2.reverse()
+        path_points_side1 = path_points_side1 + path_points_side2
+        return Polygon(path_points_side1)
 
 
 # end class CPP_Planner_Kit ------------------------------------------------------------
@@ -451,7 +479,8 @@ class CPP_Algorithms:
 
     @staticmethod
     def scanline_algorithm_single_with_headland(land: gpd.GeoDataFrame, step_size: float, along_long_edge=True,
-                                                headland='none', head_land_width=0, min_path_length=5):
+                                                headland='none', head_land_width=0, min_path_length=5,
+                                                get_largest_headland=False) -> gpd.GeoDataFrame:
         """
             基于 scanline_algorithm_single_no_turn() 添加了计算地头的功能，通过输入生成地头的方向（由于当前地块被旋转到了水平，而旋转的
         依据是将长边设置为水平，因此方向为 left, right）来生成对应方向的地头，同时可以控制需要设置的地头宽度
@@ -461,6 +490,7 @@ class CPP_Algorithms:
         :param headland: 生成地头的方式，有：1. 两侧（both）2. 不生成（none） 3.左侧（left） 4.右侧（right）
         :param head_land_width: 生成地头的宽度，目前仅能够固定宽度生成地头
         :param min_path_length: 最小保留的耕作路径长度，默认 5m
+        :param get_largest_headland: 是否获取最大的地头，如果为 True，则会获取最大的地头，否则会获取所有的地头
         :return: 当前地块的扫描路径，以及地头区域
         """
         if len(land) > 1:
@@ -525,14 +555,20 @@ class CPP_Algorithms:
         path_buffer = gpd.GeoDataFrame(geometry=[path_buffer_1, path_buffer_2], crs=land.crs)
         path_area_union = path_buffer.unary_union
         # path_area_union = Polygon(path_buffer_1.union(path_buffer_2))
+        # 目前无法解决锯齿的问题
+        # if len(path_gdf.geometry) > 1:
+        #     path_area_union = CPP_Planner_Kit.get_path_bound(path_gdf)
+        # else:
+        #     path_area_union = gpd.GeoDataFrame(geometry=[], crs=land.crs)
         headland_area = land_polygon.difference(path_area_union)
-
         # 由于多边形在计算机图形中本身就有误差，因此需要将一些零碎的小块删除，保留最大的作为地块即可
         if type(headland_area) == Polygon:
             headland_area = shapely.MultiPolygon([headland_area])
-        headland_area = CPP_Planner_Kit.get_largest_multipolygon(headland_area)
+        if get_largest_headland:
+            headland_area = CPP_Planner_Kit.get_largest_multipolygon(headland_area)
 
-        headland_gdf = gpd.GeoDataFrame(geometry=[headland_area.convex_hull], crs=land.crs)
+        # headland_gdf = gpd.GeoDataFrame(geometry=[headland_area.convex_hull], crs=land.crs)
+        headland_gdf = gpd.GeoDataFrame(geometry=[headland_area], crs=land.crs)
         # 保证当前的地头生成的区域仅在地块内
         headland_gdf = headland_gdf.intersection(land)
         print("这次规划完成！")
