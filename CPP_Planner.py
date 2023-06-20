@@ -85,7 +85,7 @@ class CPP_Planner_Kit:
         if not isinstance(line, LineString):
             print("当前的 line 不是 LineString 类型")
             return
-        print("Extending lines...")
+        # print("Extending lines...")
         # 获取线段的起始点和结束点的坐标
         x1, y1 = line.coords[0]
         x2, y2 = line.coords[1]
@@ -144,7 +144,7 @@ class CPP_Planner_Kit:
         split_line = CPP_Planner_Kit.extend_shapely_line(split_line, scale_factor=line_scale_factor)
 
         already_split_polygon = ops.split(split_polygon, split_line)
-        print("当前分割多边形个数: ", len(already_split_polygon.geoms))
+        # print("当前分割多边形个数: ", len(already_split_polygon.geoms))
         return already_split_polygon
 
     @staticmethod
@@ -287,7 +287,7 @@ class CPP_Planner_Kit:
                     convex.append(temp_polygon)
                 else:
                     concave.put(temp_polygon)
-        print("田块分割结束...")
+        # print("田块分割结束...")
         return convex
 
     @staticmethod
@@ -480,7 +480,7 @@ class CPP_Algorithms:
     @staticmethod
     def scanline_algorithm_single_with_headland(land: gpd.GeoDataFrame, step_size: float, along_long_edge=True,
                                                 headland='none', head_land_width=0, min_path_length=5,
-                                                get_largest_headland=False) -> gpd.GeoDataFrame:
+                                                get_largest_headland=False) -> [gpd.GeoDataFrame, gpd.GeoDataFrame]:
         """
             基于 scanline_algorithm_single_no_turn() 添加了计算地头的功能，通过输入生成地头的方向（由于当前地块被旋转到了水平，而旋转的
         依据是将长边设置为水平，因此方向为 left, right）来生成对应方向的地头，同时可以控制需要设置的地头宽度
@@ -507,10 +507,10 @@ class CPP_Algorithms:
 
         # 置于水平，在后面的路径规划算法中，优先使用该旋转的地块来进行路径规划
         rotated_polygon = affinity.rotate(land_polygon, -land_angle, origin=land_centroid)
-        if along_long_edge:
-            print("根据田块长边开始路径规划...")
-        else:
-            print("水平方向开始路径规划")
+        # if along_long_edge:
+        #     print("根据田块长边开始路径规划...")
+        # else:
+        #     print("水平方向开始路径规划")
 
         # 计算多边形的边界框
         min_x, min_y, max_x, max_y = rotated_polygon.bounds
@@ -549,7 +549,7 @@ class CPP_Algorithms:
         # 创建 GeoDataFrame 对象
         path_gdf = gpd.GeoDataFrame(geometry=path_lines, crs=land.crs)
         # 生成地头区域，通过创建耕作路径的缓冲区，来找到地块的区域，最后通过差集来得到地头区域
-        print("生成地头区域...")
+        # print("生成地头区域...")
         path_buffer_1 = path_gdf.buffer(step_size + 0.2, single_sided=True).unary_union
         path_buffer_2 = path_gdf.buffer(-(step_size + 0.2), single_sided=True).unary_union
         path_buffer = gpd.GeoDataFrame(geometry=[path_buffer_1, path_buffer_2], crs=land.crs)
@@ -571,8 +571,99 @@ class CPP_Algorithms:
         headland_gdf = gpd.GeoDataFrame(geometry=[headland_area], crs=land.crs)
         # 保证当前的地头生成的区域仅在地块内
         headland_gdf = headland_gdf.intersection(land)
-        print("这次规划完成！")
+        # print("这次规划完成！")
         return path_gdf, headland_gdf
+
+    @staticmethod
+    def scanline_algorithm_with_headland_by_direction(land: gpd.GeoDataFrame, step_size: float, land_angle,
+                                                      headland='none', head_land_width=0, min_path_length=5,
+                                                      get_largest_headland=False) -> [gpd.GeoDataFrame,
+                                                                                      gpd.GeoDataFrame]:
+        """
+        按照特定角度计算scanline路径规划，同时生成地头
+        :param land:
+        :param step_size:
+        :param land_angle:
+        :param headland:
+        :param head_land_width:
+        :param min_path_length:
+        :param get_largest_headland:
+        :return:
+        """
+        if len(land) > 1:
+            print("scanline_algorithm_single: 地块超过了一个，当前地块大小：", len(land))
+            return
+
+        # 将 land 中的 polygon 提取出来，保证一次只有一个地块，随即获取相关的信息
+        land_polygon = land.iloc[0].geometry
+        land_centroid = land_polygon.centroid  # 当前地块的原始坐标位置，保存的中心位置，方便后期反向旋转回退
+
+        # 置于水平，在后面的路径规划算法中，优先使用该旋转的地块来进行路径规划
+        rotated_polygon = affinity.rotate(land_polygon, -land_angle, origin=land_centroid)
+        # if along_long_edge:
+        #     print("根据田块长边开始路径规划...")
+        # else:
+        #     print("水平方向开始路径规划")
+
+        # 计算多边形的边界框
+        min_x, min_y, max_x, max_y = rotated_polygon.bounds
+
+        # 初始化路径线列表
+        path_lines = []
+
+        # 迭代扫描线
+        for y in np.arange(min_y + 0.1, max_y + step_size - 0.1, step_size):
+            # for y in np.arange(min_y, max_y - 1, step_size):
+            row_points = []
+            for i in range(len(rotated_polygon.exterior.coords) - 1):
+                edge = rotated_polygon.exterior.coords[i]
+                next_edge = rotated_polygon.exterior.coords[i + 1]
+                if (edge[1] <= y and next_edge[1] > y) or (next_edge[1] <= y and edge[1] > y):
+                    x = edge[0] + (next_edge[0] - edge[0]) * (y - edge[1]) / (next_edge[1] - edge[1])
+                    row_points.append([x, y])
+
+            # 创建扫描线的 LineString 对象
+            if len(row_points) > 1:
+                # 处理地头，首先找到 x 最小和最大的点的索引，代表当前扫描线的边界
+                min_x_index = min(range(len(row_points)), key=lambda i: row_points[i][0])
+                max_x_index = max(range(len(row_points)), key=lambda i: row_points[i][0])
+
+                # 生成地头
+                if headland == 'left' or headland == 'both':
+                    row_points[min_x_index][0] = row_points[min_x_index][0] + head_land_width
+                if headland == 'right' or headland == 'both':
+                    row_points[max_x_index][0] = row_points[max_x_index][0] - head_land_width
+                path_line = LineString(row_points)
+                # 尝试：仅保留固定长度以上的耕作路径?
+                if path_line.length > head_land_width:
+                    path_line = affinity.rotate(path_line, land_angle, origin=land_centroid)
+                    path_lines.append(path_line)
+
+        # 创建 GeoDataFrame 对象
+        path_gdf = gpd.GeoDataFrame(geometry=path_lines, crs=land.crs)
+        # 生成地头区域，通过创建耕作路径的缓冲区，来找到地块的区域，最后通过差集来得到地头区域
+        # print("生成地头区域...")
+        path_buffer_1 = path_gdf.buffer(step_size + 0.2, single_sided=True).unary_union
+        path_buffer_2 = path_gdf.buffer(-(step_size + 0.2), single_sided=True).unary_union
+        path_buffer = gpd.GeoDataFrame(geometry=[path_buffer_1, path_buffer_2], crs=land.crs)
+        path_area_union = path_buffer.unary_union
+        # path_area_union = Polygon(path_buffer_1.union(path_buffer_2))
+
+        headland_area = land_polygon.difference(path_area_union)
+        # 由于多边形在计算机图形中本身就有误差，因此需要将一些零碎的小块删除，保留最大的作为地块即可
+        if type(headland_area) == Polygon:
+            headland_area = shapely.MultiPolygon([headland_area])
+        if get_largest_headland:
+            headland_area = CPP_Planner_Kit.get_largest_multipolygon(headland_area)
+
+        # headland_gdf = gpd.GeoDataFrame(geometry=[headland_area.convex_hull], crs=land.crs)
+        headland_gdf = gpd.GeoDataFrame(geometry=[headland_area], crs=land.crs)
+        # 保证当前的地头生成的区域仅在地块内
+        headland_gdf = headland_gdf.intersection(land)
+        # print("这次规划完成！")
+        return path_gdf, headland_gdf
+
+        pass
 
 
 # end class CPP_Algorithms ------------------------------------------------------------
@@ -607,7 +698,53 @@ class CPP_Algorithm_Optimizers:
             return path_2, headland_2
         else:
             return path_1, headland_1
-        pass
+
+    @staticmethod
+    def gen_path_with_minimum_headland_area_by_direction(land: gpd.GeoDataFrame, step_size: float,
+                                                         head_land_width=0):
+        """
+        通过对当前的多边形地块进行多边形旋转，并且记录当前地块作业角度下生成的地头的面积，选择面积最小的角度进行最终耕作地块的生成
+        :param land: 进行路径规划的地块，最好是简单的多边形
+        :param step_size: 机械耕作的宽度，如果是带坡度的地形，那么这个宽度需要进行修正
+        :param head_land_width: 生成地头的宽度，按照固定的宽度预留出地头的宽度
+        :return: 耕作路径和地头区域，保证当前角度耕作能够预留出最小的地头区域，即耕作面积最大
+        """
+        # TODO: 见 bug_1,有一块 凹 形地的一部分没有进行路径规划
+
+        diff_headland_direction_area = []
+        land_polygon = land.geometry.iloc[0]
+
+        mabr_angle = CPP_Planner_Kit.get_land_MABR_angle(land_polygon)
+        land_polygon = affinity.rotate(land_polygon, -mabr_angle, origin='centroid')
+
+        # 旋转寻找
+        # for angle in range(0, 180):
+        for angle in range(-30, 30):
+            single_polygon = affinity.rotate(land_polygon, -angle, origin='centroid')
+            land_regen = gpd.GeoDataFrame(geometry=[single_polygon], crs=land.crs)
+            path, headland = CPP_Algorithms.scanline_algorithm_single_with_headland(
+                land=land_regen, step_size=step_size,
+                along_long_edge=False,
+                headland='left', head_land_width=head_land_width, get_largest_headland=False
+            )
+            diff_headland_direction_area.append(headland.geometry.area)
+        diff_headland_direction_area = [x.item() for x in diff_headland_direction_area]
+        min_area_angle = diff_headland_direction_area.index(min(diff_headland_direction_area))
+        print("min angle: ", min_area_angle)
+        # TODO: 重新写一个按照角度旋转来进行路径规划的函数
+        # path, headland = CPP_Algorithms.scanline_algorithm_single_with_headland(rotated_land, step_size,
+        #                                                                         along_long_edge=False,
+        #                                                                         along_angle=min_area_angle,
+        #                                                                         headland='left',
+        #                                                                         head_land_width=head_land_width,
+        #                                                                         get_largest_headland=False)
+        path, headland = CPP_Algorithms.scanline_algorithm_with_headland_by_direction(land=land, step_size=step_size,
+                                                                                      land_angle=min_area_angle + mabr_angle - 30,
+                                                                                      headland='left',
+                                                                                      head_land_width=head_land_width)
+        # path = path.rotate(min_area_angle)
+        # headland = headland.rotate(min_area_angle)
+        return path, headland
 
     pass
 
