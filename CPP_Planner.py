@@ -710,6 +710,7 @@ class CPP_Algorithm_Optimizers:
         :return: 耕作路径和地头区域，保证当前角度耕作能够预留出最小的地头区域，即耕作面积最大
         """
         # TODO: 见 bug_1,有一块 凹 形地的一部分没有进行路径规划
+        max_area = land.area[0]
 
         diff_headland_direction_area = []
         land_polygon = land.geometry.iloc[0]
@@ -719,7 +720,7 @@ class CPP_Algorithm_Optimizers:
 
         # 旋转寻找
         # for angle in range(0, 180):
-        for angle in range(-30, 30):
+        for angle in range(-65, 65):
             single_polygon = affinity.rotate(land_polygon, -angle, origin='centroid')
             land_regen = gpd.GeoDataFrame(geometry=[single_polygon], crs=land.crs)
             path, headland = CPP_Algorithms.scanline_algorithm_single_with_headland(
@@ -728,7 +729,9 @@ class CPP_Algorithm_Optimizers:
                 headland='left', head_land_width=head_land_width, get_largest_headland=False
             )
             diff_headland_direction_area.append(headland.geometry.area)
-        diff_headland_direction_area = [x.item() for x in diff_headland_direction_area]
+        # diff_headland_direction_area = [x.item() for x in diff_headland_direction_area]
+        diff_headland_direction_area = [x.item() if not math.isnan(x.item()) else max_area for x in
+                                        diff_headland_direction_area]
         min_area_angle = diff_headland_direction_area.index(min(diff_headland_direction_area))
         print("min angle: ", min_area_angle)
         # TODO: 重新写一个按照角度旋转来进行路径规划的函数
@@ -739,7 +742,7 @@ class CPP_Algorithm_Optimizers:
         #                                                                         head_land_width=head_land_width,
         #                                                                         get_largest_headland=False)
         path, headland = CPP_Algorithms.scanline_algorithm_with_headland_by_direction(land=land, step_size=step_size,
-                                                                                      land_angle=min_area_angle + mabr_angle - 30,
+                                                                                      land_angle=min_area_angle + mabr_angle - 65,
                                                                                       headland='left',
                                                                                       head_land_width=head_land_width)
         # path = path.rotate(min_area_angle)
