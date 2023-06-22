@@ -581,9 +581,9 @@ class CPP_Algorithms:
                                                                                       gpd.GeoDataFrame]:
         """
         按照特定角度计算scanline路径规划，同时生成地头
-        :param land:
-        :param step_size:
-        :param land_angle:
+        :param land: 当前的分割的地块的子块，geopandas.GeoDataFrame
+        :param step_size: 每次耕作幅宽，这里需要放入修正后的机械化耕作幅宽
+        :param land_angle: 当前地块的角度，经过该角度旋转后，地块能够放置为水平，方便部署 scanline 算法
         :param headland:
         :param head_land_width:
         :param min_path_length:
@@ -709,7 +709,6 @@ class CPP_Algorithm_Optimizers:
         :param head_land_width: 生成地头的宽度，按照固定的宽度预留出地头的宽度
         :return: 耕作路径和地头区域，保证当前角度耕作能够预留出最小的地头区域，即耕作面积最大
         """
-        # TODO: 见 bug_1,有一块 凹 形地的一部分没有进行路径规划
         max_area = land.area[0]
 
         diff_headland_direction_area = []
@@ -734,13 +733,7 @@ class CPP_Algorithm_Optimizers:
                                         diff_headland_direction_area]
         min_area_angle = diff_headland_direction_area.index(min(diff_headland_direction_area))
         print("min angle: ", min_area_angle)
-        # TODO: 重新写一个按照角度旋转来进行路径规划的函数
-        # path, headland = CPP_Algorithms.scanline_algorithm_single_with_headland(rotated_land, step_size,
-        #                                                                         along_long_edge=False,
-        #                                                                         along_angle=min_area_angle,
-        #                                                                         headland='left',
-        #                                                                         head_land_width=head_land_width,
-        #                                                                         get_largest_headland=False)
+
         path, headland = CPP_Algorithms.scanline_algorithm_with_headland_by_direction(land=land, step_size=step_size,
                                                                                       land_angle=min_area_angle + mabr_angle - 65,
                                                                                       headland='left',
@@ -749,7 +742,68 @@ class CPP_Algorithm_Optimizers:
         # headland = headland.rotate(min_area_angle)
         return path, headland
 
-    pass
+    @staticmethod
+    def gen_path_with_minimum_headland_area_by_edge(land: gpd.GeoDataFrame, step_size: float, head_land_width=6,
+                                                    headland_mode='left', compare_mode='headland'):
+        """
+        通过从当前的地块（保证当前的地块形状接近凸边形）的每一条边顺着耕作出发，预留耕作的地头，通过比较顺着各边生成的地头的面积，以及耕作路径的
+        长度，找到最优解，可以是耕作路径最长，也可以是耕地面积最大
+        * 需要注意，当耕地一个方向的长度低于 headland_width 时，算法会返回 nan，需要过滤掉这种情况
+        :param land: 进行路径规划的地块，要求为接近 凸边形 的多边形，接近的程度为 tolerance，默认为0.05
+        :param step_size: 耕作幅宽，需要根据当前地块所处的平均坡度进行修正
+        :param head_land_width: 地头区域的宽度，需要保证机械能够在这里做出想要的例如：掉头、转向等动作
+        :param headland_mode: 生成地头的模式，可以是 两侧（both），左侧（left），右侧（right）和不生成（none），默认为左侧
+        :param compare_mode: 比较的模式，分别为比较路径的长度，和地头的面积（默认）
+        :return: 规划完成的路径和地头区域，保证输出的地头区域为当前情况下的最优值
+        """
+        land_polygon = land.geometry.iloc[0]
+        # 获取当前多边形的中心点，方便后期旋转回原来的角度
+        land_centroid = land.centroid[0]
+        max_headland_area = land.area[0]
+        # print(land_centroid)
+        # 获取凸包，为了将就一些接近凸边形的多边形
+        land_convex_hull = land_polygon.convex_hull
+        # 开始查找边缘，以及其角度
+        polygon_edge_angles = []
+        for i in range(len(land_convex_hull.exterior.coords) - 1):
+            temp_line = LineString([land_convex_hull.exterior.coords[i], land_convex_hull.exterior.coords[i + 1]])
+            temp_edge_angle = math.degrees(math.atan2(temp_line.coords[1][1] - temp_line.coords[0][1],
+                                                      temp_line.coords[1][0] - temp_line.coords[0][0]))
+            polygon_edge_angles.append(temp_edge_angle)
+
+        # 保存每一中边耕作后的路径和地头
+        path_headland_collection = []
+        path_lengths = []
+        headland_areas = []
+        for temp_angle in polygon_edge_angles:
+            # 旋转到相应的角度，即将对应的边旋转为水平
+            temp_rotated_polygon = affinity.rotate(land_polygon, -temp_angle, origin='centroid')
+            temp_rotated_polygon_regen = gpd.GeoDataFrame(geometry=[temp_rotated_polygon], crs=land.crs)
+            # land_centroid = temp_rotated_polygon_regen.centroid[0]
+            temp_path, temp_headland = CPP_Algorithms.scanline_algorithm_single_with_headland(
+                land=temp_rotated_polygon_regen, step_size=step_size, along_long_edge=False,
+                headland=headland_mode, head_land_width=head_land_width, get_largest_headland=False
+            )
+            # 旋转回去
+            temp_path = temp_path.rotate(temp_angle, origin=(land_centroid.coords[0][0], land_centroid.coords[0][1]))
+            temp_headland = temp_headland.rotate(temp_angle,
+                                                 origin=(land_centroid.coords[0][0], land_centroid.coords[0][1]))
+            path_headland_collection.append([temp_path, temp_headland])
+            temp_length = 0
+            for line in temp_path.geometry:
+                temp_length += line.length
+            path_lengths.append(temp_length)
+            headland_areas.append(temp_headland.area.item() if not math.isnan(temp_headland.area.item())
+                                  else max_headland_area)
+
+        # 选择最小的地头面积或是最长的耕作路径
+        if compare_mode == 'headland':
+            selected_edge_index = headland_areas.index(min(headland_areas))
+        else:  # if compare_mode == 'path'
+            selected_edge_index = path_lengths.index(max(path_lengths))
+
+        # 返回对应最优的耕作路径和地头区域
+        return path_headland_collection[selected_edge_index][0], path_headland_collection[selected_edge_index][1]
 
 
 # end class Algorithm_Optimizers ------------------------------------------------------------
