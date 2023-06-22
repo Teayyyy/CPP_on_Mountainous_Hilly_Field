@@ -1,5 +1,5 @@
 """
-临时用做测试
+临时用做测试，所有功能实现见 CPP_Planner.py，规划整个地块的实现见：Compute_All_Land_Path.py
 """
 
 from CPP_Planner import CPP_Planner_Kit, CPP_Algorithms
