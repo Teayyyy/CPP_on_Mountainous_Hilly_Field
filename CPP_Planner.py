@@ -6,6 +6,7 @@ from shapely import affinity
 from shapely import ops
 import geopandas as gpd
 import math
+from math import pi
 import queue
 
 """
@@ -330,6 +331,42 @@ class CPP_Planner_Kit:
         path_points_side2.reverse()
         path_points_side1 = path_points_side1 + path_points_side2
         return Polygon(path_points_side1)
+
+    @staticmethod
+    def calc_headland_width(turning_radius: float, swath_width: float, vehicle_length: float, vehicle_width: float,
+                            buffer=0., show_info=False):
+        """
+        *** 不同的转向方式可能需要不同的地头生成方式 ***
+        计算当前地块的地头区域，当前函数生成的地头仅适合农机单向耕作，变换耕作垄采用原地转向倒车的方式
+        * 如果是坡地，这里的地头宽度是没有经过坡度修正的宽度
+        :param turning_radius: 农机的转向半径
+        :param swath_width: 两条垄（中线）之间的宽度
+        :param vehicle_length: 农机的长度
+        :param vehicle_width: 农机的宽度
+        :param buffer: 是否为地头区域增加一些“间隔/缓冲区”
+        :param show_info: 是否显示规划地头时候的信息
+        :return: 建议的地头宽度，如果设置了 buffer，则返回添加了缓冲区的地头宽度，同时返回农机转动的角度（弧度值）
+        """
+        # 计算求得车转向的角度
+        # theta = math.asin(swath_width / (2 * vehicle_length))
+        theta = math.cos((turning_radius - swath_width / 2) / turning_radius)
+        # 计算车顶点到转向圆形的距离 r2
+        # r2 = math.sqrt((turning_radius + vehicle_width / 2) ** 2 + (vehicle_length / 2) ** 2)
+        r2 = math.sqrt((turning_radius + vehicle_width/2)**2 + (vehicle_length/2)**2)
+        # theta2 = math.asin(vehicle_length / (2 * r2))
+        theta2 = math.atan((vehicle_length/2) / (turning_radius + vehicle_width/2))
+        # w2 = r2 * math.sin(theta + theta2)
+        width_1 = r2 * math.sin(theta + theta2)
+        final_width = width_1 + vehicle_length / 2
+        if show_info:
+            print("Theta: ", theta)
+            print("r2: ", r2)
+            print("Theta2: ", theta2)
+            print("w2:", width_1)
+            print("Buffer: ", buffer)
+            print("最终地头宽度: ", final_width + buffer)
+
+        return final_width + buffer, theta
 
 
 # end class CPP_Planner_Kit ------------------------------------------------------------
@@ -815,4 +852,103 @@ class CPP_Algorithm_Optimizers:
 
 
 class CPP_Planner_TurningRail_Maker:
+    """
+    这是单向耕作，单向地头，倒车后继续耕作模式
+    """
+
+    @staticmethod
+    def gen_single_curve(center: [float, float], radius: float, degree_step: float, theta_1: float, theta_2):
+        """
+        生成一个基础圆弧，默认从 theta_1 弧度 开始，逆时针旋转到 theta_2 弧度结束，由于考虑到多边形，以特定度数为精度间隔生成圆弧
+
+        * 使用 *弧度*
+        :param center 圆弧的圆心
+        :param radius: 圆弧的半径
+        :param degree_step: 圆弧的精度，输入为度数，后续会主动转换为弧度
+        :param theta_1: 圆弧的起始 弧度
+        :param theta_2: 圆弧的终止 弧度
+        :return: LineString
+        """
+        # 默认从 0 开始
+        # center_x = 0
+        # center_y = 0
+        center_x = center[0]
+        center_y = center[1]
+
+        # # 将起始点和终点的坐标转换为 LineString
+        # start_point = (center_x + radius * np.cos(0), center_y + radius * np.sin(0),)
+        # end_point = (center_x + radius * np.cos(theta), center_y + radius * np.sin(theta),)
+        start_point = (center_x + radius * np.cos(theta_1), center_y + radius * np.sin(theta_1))
+        end_point = (center_x + radius * np.cos(theta_2), center_y + radius * np.sin(theta_2))
+
+        coordinates = [start_point]
+
+        # # 依据 degree_step 来计算 start_point 和 end_point 之间的坐标
+        # angles = np.arange(0, theta, np.deg2rad(degree_step))
+        if theta_2 > theta_1:
+            angles = np.arange(theta_1, theta_2, np.deg2rad(degree_step))
+        else:
+            angles = np.arange(theta_2, theta_1, np.deg2rad(degree_step))
+
+        for angle in angles:
+            temp_x = center_x + radius * np.cos(angle)
+            temp_y = center_y + radius * np.sin(angle)
+            coordinates.append((temp_x, temp_y))
+
+        # 补充终点
+        coordinates.append(end_point)
+
+        curve = LineString(coordinates)
+        return curve
+
+    @staticmethod
+    def gen_S_shape_curve(turning_radius: float, degree_step: float, vehicle_length: float, vehicle_width: float,
+                          swath_width: float, buffer: float):
+        """
+        生成用于 单向 + 倒车 的转向 S 路径的生成，S 曲线的路径已经被标准化，起始位置为 (0, 0)，详细见 test_gen_turning_path
+        * 使用 *弧度*
+        * 生成的路径默认转向起始在路径末端坐标的 y - turning_radius 处，默认在 “水平化后的路径” 的右侧进行规划
+        * 在生成路径地头，即 scanline_xxxx() 时，headland='left'，以保证正确生成地头
+        * 如果转向路径过大，那么不一定车辆在重新转回水平时能刚好在下一条 swath 上
+        :param turning_radius:
+        :param degree_step:
+        :param vehicle_length:
+        :param vehicle_width:
+        :param swath_width:
+        :param buffer:
+        :return: S 曲线的 gpd，由于是标准位置，因此 S curve 的起始位置默认为 S 的右侧顶点，设置为 0, 0
+        """
+        # 获得地头长度，以及旋转的弧度值
+        headland_width, theta = CPP_Planner_Kit.calc_headland_width(turning_radius, swath_width, vehicle_length,
+                                                                    vehicle_width, buffer)
+        # 模拟两条耕作路径，但是完全按照实际情况配置比例大小，最终返回一个做好的 “标准 S 曲线路径”
+        swath1 = LineString(((0, 1.45), (20, 1.45)))
+        swath2 = LineString(((0, 0), (20, 0)))
+        # 获取圆心的位置，此时 第二个圆心还需要修正
+        center1 = (swath1.coords[1][0], swath1.coords[1][1] - turning_radius)
+        center2 = (swath2.coords[1][0] - 2 * (turning_radius * math.sin(theta)), swath2.coords[1][1] + turning_radius)
+
+        # 绘制弧线，根据两个圆心
+        curve_1 = CPP_Planner_TurningRail_Maker.gen_single_curve(
+            center1, turning_radius, degree_step, pi/2, theta + pi/2
+        )
+        curve_2 = CPP_Planner_TurningRail_Maker.gen_single_curve(
+            center2, turning_radius, degree_step, -pi/2, -pi/2 + theta
+        )
+
+        # 修正曲线
+        curve_correction_gap = abs(curve_2.coords[-1][1] - curve_1.coords[-1][1])
+        curve_2_corrected = affinity.translate(curve_2, xoff=0, yoff=-curve_correction_gap, zoff=0)
+
+        # 将曲线移动到（0，0）处
+        curve_1_normalized = affinity.translate(curve_1, xoff=-curve_1.coords[0][0], yoff=-curve_1.coords[0][1])
+        curve_2_normalized = affinity.translate(curve_2_corrected, xoff=-curve_1.coords[0][0], yoff=-curve_1.coords[0][1])
+
+        # 作为 gpd 返回，注意这里没有设置 crs
+        S_curved_line = gpd.GeoDataFrame(geometry=[curve_1_normalized, curve_2_normalized])
+        return S_curved_line
+
+    """
+    * 其他 *
+    """
     pass
