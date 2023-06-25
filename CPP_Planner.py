@@ -352,9 +352,9 @@ class CPP_Planner_Kit:
         theta = math.cos((turning_radius - swath_width / 2) / turning_radius)
         # 计算车顶点到转向圆形的距离 r2
         # r2 = math.sqrt((turning_radius + vehicle_width / 2) ** 2 + (vehicle_length / 2) ** 2)
-        r2 = math.sqrt((turning_radius + vehicle_width/2)**2 + (vehicle_length/2)**2)
+        r2 = math.sqrt((turning_radius + vehicle_width / 2) ** 2 + (vehicle_length / 2) ** 2)
         # theta2 = math.asin(vehicle_length / (2 * r2))
-        theta2 = math.atan((vehicle_length/2) / (turning_radius + vehicle_width/2))
+        theta2 = math.atan((vehicle_length / 2) / (turning_radius + vehicle_width / 2))
         # w2 = r2 * math.sin(theta + theta2)
         width_1 = r2 * math.sin(theta + theta2)
         final_width = width_1 + vehicle_length / 2
@@ -781,7 +781,7 @@ class CPP_Algorithm_Optimizers:
 
     @staticmethod
     def gen_path_with_minimum_headland_area_by_edge(land: gpd.GeoDataFrame, step_size: float, head_land_width=6,
-                                                    headland_mode='left', compare_mode='headland'):
+                                                    headland_mode='left', compare_mode='headland', return_theta=False):
         """
         通过从当前的地块（保证当前的地块形状接近凸边形）的每一条边顺着耕作出发，预留耕作的地头，通过比较顺着各边生成的地头的面积，以及耕作路径的
         长度，找到最优解，可以是耕作路径最长，也可以是耕地面积最大
@@ -791,6 +791,7 @@ class CPP_Algorithm_Optimizers:
         :param head_land_width: 地头区域的宽度，需要保证机械能够在这里做出想要的例如：掉头、转向等动作
         :param headland_mode: 生成地头的模式，可以是 两侧（both），左侧（left），右侧（right）和不生成（none），默认为左侧
         :param compare_mode: 比较的模式，分别为比较路径的长度，和地头的面积（默认）
+        :param return_theta: 是否返回最小地块的角度
         :return: 规划完成的路径和地头区域，保证输出的地头区域为当前情况下的最优值
         """
         land_polygon = land.geometry.iloc[0]
@@ -838,6 +839,9 @@ class CPP_Algorithm_Optimizers:
             selected_edge_index = headland_areas.index(min(headland_areas))
         else:  # if compare_mode == 'path'
             selected_edge_index = path_lengths.index(max(path_lengths))
+
+        if return_theta:
+            return path_headland_collection[selected_edge_index][0], path_headland_collection[selected_edge_index][1], polygon_edge_angles[selected_edge_index]
 
         # 返回对应最优的耕作路径和地头区域
         return path_headland_collection[selected_edge_index][0], path_headland_collection[selected_edge_index][1]
@@ -908,7 +912,7 @@ class CPP_Planner_TurningRail_Maker:
         生成用于 单向 + 倒车 的转向 S 路径的生成，S 曲线的路径已经被标准化，起始位置为 (0, 0)，详细见 test_gen_turning_path
         * 使用 *弧度*
         * 生成的路径默认转向起始在路径末端坐标的 y - turning_radius 处，默认在 “水平化后的路径” 的右侧进行规划
-        * 在生成路径地头，即 scanline_xxxx() 时，headland='left'，以保证正确生成地头
+        * 在生成路径地头，即 scanline_xxxx() 时，headland='right'，以保证正确生成地头
         * 如果转向路径过大，那么不一定车辆在重新转回水平时能刚好在下一条 swath 上
         :param turning_radius:
         :param degree_step:
@@ -930,10 +934,10 @@ class CPP_Planner_TurningRail_Maker:
 
         # 绘制弧线，根据两个圆心
         curve_1 = CPP_Planner_TurningRail_Maker.gen_single_curve(
-            center1, turning_radius, degree_step, pi/2, theta + pi/2
+            center1, turning_radius, degree_step, pi / 2, theta + pi / 2
         )
         curve_2 = CPP_Planner_TurningRail_Maker.gen_single_curve(
-            center2, turning_radius, degree_step, -pi/2, -pi/2 + theta
+            center2, turning_radius, degree_step, -pi / 2, -pi / 2 + theta
         )
 
         # 修正曲线
@@ -942,11 +946,80 @@ class CPP_Planner_TurningRail_Maker:
 
         # 将曲线移动到（0，0）处
         curve_1_normalized = affinity.translate(curve_1, xoff=-curve_1.coords[0][0], yoff=-curve_1.coords[0][1])
-        curve_2_normalized = affinity.translate(curve_2_corrected, xoff=-curve_1.coords[0][0], yoff=-curve_1.coords[0][1])
+        curve_2_normalized = affinity.translate(curve_2_corrected, xoff=-curve_1.coords[0][0],
+                                                yoff=-curve_1.coords[0][1])
 
         # 作为 gpd 返回，注意这里没有设置 crs
         S_curved_line = gpd.GeoDataFrame(geometry=[curve_1_normalized, curve_2_normalized])
         return S_curved_line
+
+    @staticmethod
+    def gen_S_turning_paths_in_polygon(path: gpd.GeoDataFrame, theta: float, turning_radius: float,
+                                       vehicle_length: float, vehicle_width: float, swath_width: float,
+                                       headland_width: float, centroid, buffer=0, degree_step=0.2):
+        """
+        通过由其他算法生成的 path，来生成转向路径和反向倒车等路径
+        * 本方法仅适用于单向作业，通过倒车至下一耕作路径的 “S型” 转向方式
+        * 使用本方法，需要保证在生成地头的方向为 “right”
+        :param path: 规划耕作路径
+        :param theta: 路径与水平方向的夹角，用于旋转路径
+        :param turning_radius: 转向半径
+        :param vehicle_length: 农机长度
+        :param vehicle_width: 农机宽度
+        :param swath_width: 耕作宽度
+        :param headland_width: 地头的宽度
+        :param centroid: 旋转中心
+        :param buffer: 缓冲区
+        :param degree_step: 转向曲线的精度
+        :return: 地头行驶路径，转向路径，倒车路径
+        """
+        # TODO: 如何保证 从上到下 和 从下到上两种路径的生成？
+        # 将路径转至水平
+        path = path.rotate(-theta, origin=centroid)
+        paths = path.geometry.tolist()
+        # 生成当前地块参数下的S曲线模版
+        basic_S_curve = CPP_Planner_TurningRail_Maker.gen_S_shape_curve(turning_radius, degree_step, vehicle_length,
+                                                                        vehicle_width, swath_width, buffer)
+
+        # 开始制作转向路径、倒车路径、地头路径
+        turning_curves = []
+        backward_moves = []
+        forward_moves = []
+        for i in range(1, len(paths)):
+            temp_path = paths[i]
+            pre_path = paths[i-1]
+            # 找到 “右侧” 的一点
+            if temp_path.coords[0][0] > temp_path.coords[-1][0]:
+                temp_end_point = temp_path.coords[0]
+                temp_begin_index = -1
+            else:
+                temp_end_point = temp_path.coords[-1]
+                temp_begin_index = 0
+            # temp_end_point = temp_path.coords[0]
+            # 地头行驶路线
+            temp_forward_line = LineString((temp_end_point, (temp_end_point[0]+headland_width, temp_end_point[1]),))
+            # 转向的 S 曲线，注意这里是两根
+            temp_S_line = basic_S_curve.translate(xoff=temp_forward_line.coords[-1][0],
+                                                  yoff=temp_forward_line.coords[-1][1], zoff=0)
+            # 倒车线
+            temp_backward_line = LineString((temp_S_line.geometry[1].coords[0], pre_path.coords[temp_begin_index]))
+
+            forward_moves.append(temp_forward_line)
+            turning_curves.append(temp_S_line.geometry[0])
+            turning_curves.append(temp_S_line.geometry[1])
+            backward_moves.append(temp_backward_line)
+
+        forward_moves = gpd.GeoDataFrame(geometry=forward_moves, crs=path.crs)
+        turning_curves = gpd.GeoDataFrame(geometry=turning_curves, crs=path.crs)
+        backward_moves = gpd.GeoDataFrame(geometry=backward_moves, crs=path.crs)
+
+        # 转回去
+        forward_moves = forward_moves.rotate(theta, origin=centroid)
+        turning_curves = turning_curves.rotate(theta, origin=centroid)
+        backward_moves = backward_moves.rotate(theta, origin=centroid)
+
+        return forward_moves, turning_curves, backward_moves
+        pass
 
     """
     * 其他 *
