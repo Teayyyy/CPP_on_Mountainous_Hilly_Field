@@ -1229,7 +1229,7 @@ class CPP_Planner_TurningRail_Maker:
                     pass
                 else:  # right_point[0] < right_point_2[0]
                     gap = right_point_2[0] - right_point[0]
-                    compensate_line = LineString((right_point, (right_point[0] + gap, right_point_2[1])))
+                    compensate_line = LineString((right_point, (right_point[0] + gap, right_point[1])))
                     temp_fishtails = fishtail_1.translate(xoff=right_point_2[0], yoff=right_point[1] + swath_width)
                     pass
                 temp_fishtails = gpd.GeoDataFrame(geometry=list(temp_fishtails.geometry) + [compensate_line])
@@ -1395,6 +1395,7 @@ class CPP_Planner_TurningRail_Maker:
                     fishtail_paths += temp_fishtails
                     temp_fishtails = []
                 begin = -1
+
         # 额外处理一次
         if len(temp_paths) > 1:
             temp_fishtails = CPP_Planner_TurningRail_Maker.gen_fishtail_in_paths(gpd.GeoDataFrame(
