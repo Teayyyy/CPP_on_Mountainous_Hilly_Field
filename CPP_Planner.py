@@ -841,7 +841,8 @@ class CPP_Algorithm_Optimizers:
             selected_edge_index = path_lengths.index(max(path_lengths))
 
         if return_theta:
-            return path_headland_collection[selected_edge_index][0], path_headland_collection[selected_edge_index][1], polygon_edge_angles[selected_edge_index]
+            return path_headland_collection[selected_edge_index][0], path_headland_collection[selected_edge_index][1], \
+                polygon_edge_angles[selected_edge_index]
 
         # 返回对应最优的耕作路径和地头区域
         return path_headland_collection[selected_edge_index][0], path_headland_collection[selected_edge_index][1]
@@ -987,7 +988,7 @@ class CPP_Planner_TurningRail_Maker:
         forward_moves = []
         for i in range(1, len(paths)):
             temp_path = paths[i]
-            pre_path = paths[i-1]
+            pre_path = paths[i - 1]
             # 找到 “右侧” 的一点
             if temp_path.coords[0][0] > temp_path.coords[-1][0]:
                 temp_end_point = temp_path.coords[0]
@@ -997,7 +998,7 @@ class CPP_Planner_TurningRail_Maker:
                 temp_begin_index = 0
             # temp_end_point = temp_path.coords[0]
             # 地头行驶路线
-            temp_forward_line = LineString((temp_end_point, (temp_end_point[0]+headland_width, temp_end_point[1]),))
+            temp_forward_line = LineString((temp_end_point, (temp_end_point[0] + headland_width, temp_end_point[1]),))
             # 转向的 S 曲线，注意这里是两根
             temp_S_line = basic_S_curve.translate(xoff=temp_forward_line.coords[-1][0],
                                                   yoff=temp_forward_line.coords[-1][1], zoff=0)
@@ -1019,6 +1020,297 @@ class CPP_Planner_TurningRail_Maker:
         backward_moves = backward_moves.rotate(theta, origin=centroid)
 
         return forward_moves, turning_curves, backward_moves
+        pass
+
+    """
+    这是双向耕作，首先使用套行法尽力耕作垄，再将剩下的垄用 “鱼尾” 转弯法 往复耕作
+    """
+
+    @staticmethod
+    def calc_min_swath_jump(turning_radius: float, swath_width: float):
+        """
+        计算当前的转向半径下，距离当前垄的下一个最近可达的垄数
+        例如：当前转向半径为 4.5， 垄距 1.45，则需要 (4.5 * 2) / 1.45 向上取整约为 7
+             则从当前垄开始数（0），到第七垄（7）才是下一个能够够到的垄
+        * 最近的垄为：在农机经历两次 90度 转向后，大于其水平距离的第一个垄
+        :param turning_radius: 农机转向半径
+        :param swath_width: 一垄的宽度
+        :return: 从下一垄开始，最近能够够到的垄
+        """
+        next_reachable_swath = (2 * turning_radius) // swath_width
+        if (2 * turning_radius) % swath_width == 0:
+            return next_reachable_swath
+        else:  # 向上取整
+            return next_reachable_swath + 1
+
+    @staticmethod
+    def calc_flat_turn_headland_width(turning_radius: float, vehicle_length: float, vehicle_width: float):
+        """
+        计算在 “平滑转向 & 鱼尾转向“ 的时候，需要多宽的地头
+        * 以农机 “中心“ 为起始点
+        * 农机末尾刚好在耕作区域外
+        * 以农机外侧上角为最远距离
+        :param turning_radius: 农机的转向半径
+        :param vehicle_length: 农机长度
+        :param vehicle_width: 农机宽度
+        :return: 最小地头宽度
+        """
+        return int(
+            vehicle_length / 2 + math.sqrt((turning_radius + vehicle_width / 2) ** 2 + (vehicle_length / 2) ** 2))
+
+    @staticmethod
+    def gen_bow_shape_curve(turning_radius: float, min_jump_swaths: int, swath_width: float, side='right', plus=0,
+                            degree_step=0.1):
+        """
+        生成一个 平滑转向 的基本形状，为两个 1/4圆中间连接一根直线的 弓 型
+        * 弓 型被标准化到了原点，默认都是较上方的圆弧的点位于原点
+        :param turning_radius:
+        :param min_jump_swaths:
+        :param swath_width:
+        :param side:
+        :param plus:
+        :param degree_step:
+        :return: LineString * 3
+        """
+
+        if side == 'right':
+            curve_1 = CPP_Planner_TurningRail_Maker.gen_single_curve((0, -turning_radius), turning_radius, degree_step,
+                                                                     0, pi / 2)
+            gap = swath_width * (min_jump_swaths + plus) - 2 * turning_radius
+            padding_line = LineString(((turning_radius, -turning_radius), (turning_radius, -turning_radius - gap)))
+            curve_2 = CPP_Planner_TurningRail_Maker.gen_single_curve((0, -turning_radius - gap), turning_radius,
+                                                                     degree_step, -pi / 2, 0)
+            pass
+        elif side == 'left':
+            curve_1 = CPP_Planner_TurningRail_Maker.gen_single_curve((0, -turning_radius), turning_radius, degree_step,
+                                                                     pi / 2, pi)
+            gap = swath_width * (min_jump_swaths + plus) - 2 * turning_radius
+            padding_line = LineString(((-turning_radius, -turning_radius), (-turning_radius, -turning_radius - gap),))
+            curve_2 = CPP_Planner_TurningRail_Maker.gen_single_curve((0, -turning_radius - gap), turning_radius,
+                                                                     degree_step, pi, pi * 3 / 2)
+            pass
+        else:
+            print("方向信息错误！")
+            return
+        result = gpd.GeoDataFrame(geometry=[curve_1, padding_line, curve_2])
+        return result
+
+    @staticmethod
+    def gen_fishtail_shape_curve(turning_radius: float, swath_width: float, side='right', degree_step=0.1, plus=0):
+        """
+        生成鱼尾转向
+        * 鱼尾 被标准化到了原点，“向下弯曲” 的圆弧的水平段端点位于 (0, 0)
+        * 鱼尾转向默认移动到下一条路径，可以通过 plus 调整到另一条路上
+        :param turning_radius:
+        :param swath_width:
+        :param side: 鱼尾朝向那一侧，默认右侧 right
+        :param degree_step: 精度，建议越高越好
+        :param plus: 默认就是移动到下一条，可以设置更大的跨度，例如 plus=1 则移动到下面的第二条
+        :return:
+        """
+        if side == 'right':
+            curve_1 = CPP_Planner_TurningRail_Maker.gen_single_curve((0, -turning_radius), turning_radius, degree_step,
+                                                                     0, pi / 2)
+            padding_1 = LineString((
+                (turning_radius, -turning_radius), (turning_radius, -swath_width + turning_radius)
+            ))
+            curve_2 = CPP_Planner_TurningRail_Maker.gen_single_curve((0, turning_radius - swath_width), turning_radius,
+                                                                     degree_step, -pi / 2, 0)
+            pass
+        elif side == 'left':
+            curve_1 = CPP_Planner_TurningRail_Maker.gen_single_curve((0, -turning_radius), turning_radius, degree_step,
+                                                                     pi / 2, pi)
+            padding_1 = LineString((
+                (-turning_radius, -turning_radius), (-turning_radius, -swath_width + turning_radius)
+            ))
+            curve_2 = CPP_Planner_TurningRail_Maker.gen_single_curve((0, -swath_width + turning_radius), turning_radius,
+                                                                     degree_step, pi, pi * 3 / 2)
+            pass
+        else:
+            print("鱼尾朝向不对！")
+            return
+        result = gpd.GeoDataFrame(geometry=[curve_1, padding_1, curve_2])
+        return result
+
+    @staticmethod
+    def gen_path_tillage_method(path: gpd.GeoDataFrame, turning_radius: float, vehicle_length: float,
+                                vehicle_width: float, swath_width: float):
+        """
+        当采取往复式耕作的时候，判定每一垄的耕作方向，以及下一条垄的位置
+        * 将田块内的耕作路径抽象为点集合，例如 [0, 0, 0, 0, 0, 0] 因此耕作方向为向右或向左，且分上下
+        * 每一垄路径的情况：
+            * 0: 使用鱼尾转向
+            * 1. 在上方向右到达最近可达垄 + 1垄  2. 在下方到达左侧最近可达垄  3. 在下方向右到达最近可达垄 + 1垄  4.在上方到达右侧最近可达垄
+        :param path:
+        :param turning_radius:
+        :param vehicle_length:
+        :param vehicle_width:
+        :param swath_width:
+        :return:
+        """
+        n = len(path)
+        # n = 16
+        swath = [0 for i in range(n)]
+        # 找到最小的可以达到的下一垄，必须要大于转向半径的两倍
+        min_jump_swaths = int(CPP_Planner_TurningRail_Maker.calc_min_swath_jump(turning_radius, swath_width))
+        max_length = int((min_jump_swaths + 1) * 2 - 1)
+        # iteration 是按照固定的一次能够通过 平滑转向 耕作完的一整块，大小是 max_length，当总垄数超过这个数的时候，将其拆分开处理，但需要注意方向
+        iteration = int(n // max_length)
+        if n % max_length != 0:
+            iteration += 1
+
+        direction = False  # 耕作的方向，当为 true 表示向右，false 向左
+        is_up = False  # 当前这一批垄是按照上还是下方向，如果 true 则垄的编号只可能是 1 2，false 则只可能是 3 4
+
+        for i in range(iteration):
+            is_up ^= True
+            offset = i * max_length
+            ind = 0
+            run = True  # 控制内部循环是否继续跑
+
+            while run:
+                direction ^= True
+                if direction:
+                    if offset + ind + min_jump_swaths < n - 1:
+                        if is_up:
+                            swath[offset + ind] = 1
+                        else:  # if not is_up
+                            swath[offset + ind] = 3
+                        ind = ind + min_jump_swaths + 1
+                    else:
+                        run = False
+                else:  # direction == False
+                    if swath[offset + ind - min_jump_swaths] == 0:
+                        if is_up:
+                            swath[offset + ind] = 2
+                        else:  # is_up == False
+                            swath[offset + ind] = 4
+                        ind = ind - min_jump_swaths
+                    else:
+                        run = False
+
+        return swath, min_jump_swaths
+
+    @staticmethod
+    def gen_path_flat_turn_tail_turn(path: gpd.GeoDataFrame, turning_radius: float, vehicle_length: float,
+                                     vehicle_width: float, swath_width: float):
+        """
+        生成 flat turn 转向 + 鱼尾转向的路径，先处理 flat turn， 再处理鱼尾
+        * 每一垄路径的情况：
+            * 0: 使用鱼尾转向
+            * 1. 在上方向右到达最近可达垄 + 1垄  2. 在下方到达左侧最近可达垄  3. 在下方向右到达最近可达垄 + 1垄  4.在上方到达右侧最近可达垄
+        :param path:
+        :param turning_radius:
+        :param vehicle_length:
+        :param vehicle_width:
+        :param swath_width:
+        :return:
+        """
+        # TODO: 将农机长度也算在内
+        tillage_method, min_jump_swath = CPP_Planner_TurningRail_Maker.gen_path_tillage_method(path, turning_radius,
+                                                                                               vehicle_length,
+                                                                                               vehicle_width,
+                                                                                               swath_width)
+        normalized_bow_curve_right \
+            = CPP_Planner_TurningRail_Maker.gen_bow_shape_curve(turning_radius, min_jump_swath, swath_width,
+                                                                'right', 1)
+        normalized_bow_curve_left \
+            = CPP_Planner_TurningRail_Maker.gen_bow_shape_curve(turning_radius, min_jump_swath, swath_width,
+                                                                'left', 0)
+        normalized_bow_curve_right.set_crs(path.crs)
+        normalized_bow_curve_left.set_crs(path.crs)
+        turning_paths = []
+        # flat turn，注意path是从下到上的，需要翻过来
+        for i in range(len(tillage_method)):
+            # i = len(tillage_method) - j - 1
+            if tillage_method[i] == 1:
+                # 找到需要放置的 swath 点，因为是右侧，所以需要找到 swath 中偏右的点
+                line = path.geometry.iloc[i]
+                line_2 = path.geometry.iloc[i + min_jump_swath + 1]
+                # 确定 右侧 的点
+                right_point = line.coords[0] if line.coords[0][0] > line.coords[-1][0] else line.coords[-1]
+                right_point_2 = line_2.coords[0] if line_2.coords[0][0] > line_2.coords[-1][0] else line_2.coords[-1]
+
+                # 确定哪一条线短一点，需要额外移动一段距离才能够得到 弓形 曲线
+                if right_point[0] > right_point_2[0]:
+                    gap = right_point[0] - right_point_2[0]
+                    compensate_line = LineString((right_point_2, (right_point_2[0] + gap, right_point_2[1])))
+                else:  # right_point[0] < right_point_2[0]
+                    gap = right_point_2[0] - right_point[0]
+                    compensate_line = LineString((right_point, (right_point[0] + gap, right_point_2[1])))
+
+                # 将标准 弓形 曲线移动到指定的位置
+                temp_bow_line = normalized_bow_curve_right.translate(xoff=right_point[0],
+                                                                     yoff=right_point[1] + swath_width * (
+                                                                                 min_jump_swath + 1))
+                temp_bow_line = gpd.GeoDataFrame(geometry=list(temp_bow_line.geometry) + [compensate_line])
+                turning_paths.append(temp_bow_line)
+
+                # line_1 = path.geometry.iloc[i]
+                # line_2 = path.geometry.iloc[i + min_jump_swath + 1]
+                # right_points = line_1.coords[0] if line_1.coords[0][0] > line_1.coords[-1][0] else line_1.coords[-1]
+                # right_points_2 = line_2.coords[0] if line_2.coords[0][0] > line_2.coords[-1][0] else line_2.coords[-1]
+                # if right_points[0] < right_points_2[0]:
+                #     padding_2 = LineString(
+                #         (right_points, (right_points_2[0], right_points[1]))
+                #     )
+                # else:
+                #     padding_2 = LineString(
+                #         (right_points_2, (right_points[0], right_points_2[1]))
+                #     )
+                # turning_paths.append(padding_2)
+                # curve_1 = CPP_Planner_TurningRail_Maker.gen_single_curve(
+                #     (right_points[0], right_points[1] + turning_radius), turning_radius, 0.1, -pi / 2, 0
+                # )
+                # padding = LineString((
+                #     (right_points[0] + turning_radius, right_points[1] + turning_radius),
+                #     (right_points[0] + turning_radius, right_points[1] + turning_radius +
+                #      (swath_width * (min_jump_swath + 1) - 2 * turning_radius))
+                # ))
+                # curve_2 = CPP_Planner_TurningRail_Maker.gen_single_curve(
+                #     (right_points[0], right_points[1] + turning_radius +
+                #      (swath_width * (min_jump_swath + 1) - 2 * turning_radius)),
+                #     turning_radius, 0.1, 0, pi / 2
+                # )
+                # turning_paths.append(curve_1)
+                # turning_paths.append(padding)
+                # turning_paths.append(curve_2)
+                pass
+            elif tillage_method[i] == 2:
+                line = path.geometry.iloc[i]
+                line_2 = path.geometry.iloc[i - min_jump_swath]
+                left_point = line.coords[0] if line.coords[0][0] < line.coords[-1][0] else line.coords[-1]
+                left_point_2 = line_2.coords[0] if line_2.coords[0][0] < line_2.coords[-1][0] else line_2.coords[-1]
+                # 比较两条线的长短，需要将 弓形曲线 放到长边处
+                if left_point[0] < left_point_2[0]:
+                    gap = left_point_2[0] - left_point[0]
+                    compensate_line = \
+                        LineString(((left_point_2[0] - gap, left_point_2[1]), (left_point_2[0], left_point_2[1])))
+                    temp_bow_line = normalized_bow_curve_left.translate(xoff=left_point[0], yoff=left_point[1])
+                else:  # left_point[0] > left_point_2[0]
+                    gap = left_point[0] - left_point_2[0]
+                    compensate_line = \
+                        LineString(((left_point[0] - gap, left_point[1]), (left_point[0], left_point[1])))
+                    temp_bow_line = normalized_bow_curve_left.translate(xoff=left_point_2[0], yoff=left_point_2[1] + (
+                                swath_width * min_jump_swath))
+
+                # 移动 标准弓形曲线
+
+                # temp_bow_line = normalized_bow_curve_left.translate(xoff=left_point[0], yoff=left_point[1])
+                temp_bow_line = gpd.GeoDataFrame(geometry=list(temp_bow_line.geometry) + [compensate_line])
+                turning_paths.append(temp_bow_line)
+                pass
+            elif tillage_method[i] == 3:
+                pass
+            elif tillage_method[i] == 4:
+                pass
+
+        # fishtail turn
+        for i in range(len(tillage_method)):
+            if tillage_method[i] == '0':
+                pass
+
+        return turning_paths
         pass
 
     """
