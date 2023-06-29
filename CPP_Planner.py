@@ -1224,15 +1224,17 @@ class CPP_Planner_TurningRail_Maker:
 
                 if right_point[0] > right_point_2[0]:
                     gap = right_point[0] - right_point_2[0]
-                    compensate_line = LineString((right_point_2, (right_point_2[0] + gap, right_point_2[1])))
-                    temp_fishtails = fishtail_1.translate(xoff=right_point[0], yoff=right_point[1] + swath_width)
+                    compensate_line = LineString((right_point_2, (right_point_2[0] + gap + vehicle_length/2, right_point_2[1])))
+                    compensate_line_2 = LineString((right_point, (right_point[0] + vehicle_length/2, right_point[1])))
+                    temp_fishtails = fishtail_1.translate(xoff=right_point[0] + vehicle_length/2, yoff=right_point[1] + swath_width)
                     pass
                 else:  # right_point[0] < right_point_2[0]
                     gap = right_point_2[0] - right_point[0]
-                    compensate_line = LineString((right_point, (right_point[0] + gap, right_point[1])))
-                    temp_fishtails = fishtail_1.translate(xoff=right_point_2[0], yoff=right_point[1] + swath_width)
+                    compensate_line = LineString((right_point, (right_point[0] + gap + vehicle_length/2, right_point[1])))
+                    compensate_line_2 = LineString((right_point_2, (right_point_2[0] + vehicle_length/2, right_point_2[1])))
+                    temp_fishtails = fishtail_1.translate(xoff=right_point_2[0] + vehicle_length/2, yoff=right_point[1] + swath_width)
                     pass
-                temp_fishtails = gpd.GeoDataFrame(geometry=list(temp_fishtails.geometry) + [compensate_line])
+                temp_fishtails = gpd.GeoDataFrame(geometry=list(temp_fishtails.geometry) + [compensate_line, compensate_line_2])
                 fishtails.append(temp_fishtails)
                 pass
             else:  # direction == False
@@ -1240,15 +1242,17 @@ class CPP_Planner_TurningRail_Maker:
                 left_point_2 = line_2.coords[0] if line_2.coords[0][0] < line_2.coords[-1][0] else line_2.coords[-1]
                 if left_point[0] < left_point_2[0]:
                     gap = left_point_2[0] - left_point[0]
-                    compensate_line = LineString(((left_point[0], left_point_2[1]), (left_point_2[0], left_point_2[1])))
-                    temp_fishtails = fishtail_2.translate(xoff=left_point[0], yoff=left_point[1] + swath_width)
+                    compensate_line = LineString(((left_point[0] - vehicle_length/2, left_point_2[1]), (left_point_2[0], left_point_2[1])))
+                    compensate_line_2 = LineString((left_point, (left_point[0] - vehicle_length/2, left_point[1])))
+                    temp_fishtails = fishtail_2.translate(xoff=left_point[0] - vehicle_length/2, yoff=left_point[1] + swath_width)
                 else:  # left_point[0] > left_point_2[0]
                     gap = left_point[0] - left_point_2[0]
-                    compensate_line = LineString(((left_point_2[0], left_point[1]), (left_point[0], left_point[1])))
-                    temp_fishtails = fishtail_2.translate(xoff=left_point[0], yoff=left_point[1] + swath_width)
+                    compensate_line = LineString(((left_point_2[0] - vehicle_length/2, left_point[1]), (left_point[0], left_point[1])))
+                    compensate_line_2 = LineString((left_point_2, (left_point_2[0] - vehicle_length/2, left_point_2[1])))
+                    temp_fishtails = fishtail_2.translate(xoff=left_point[0] - vehicle_length/2, yoff=left_point[1] + swath_width)
 
                 # fishtails.append(temp_fishtails)
-                temp_fishtails = gpd.GeoDataFrame(geometry=list(temp_fishtails.geometry) + [compensate_line])
+                temp_fishtails = gpd.GeoDataFrame(geometry=list(temp_fishtails.geometry) + [compensate_line, compensate_line_2])
                 fishtails.append(temp_fishtails)
                 fishtails.append(gpd.GeoDataFrame(geometry=[compensate_line]))
         return fishtails
@@ -1303,18 +1307,20 @@ class CPP_Planner_TurningRail_Maker:
                 # 确定哪一条线短一点，需要额外移动一段距离才能够得到 弓形 曲线
                 if right_point[0] > right_point_2[0]:
                     gap = right_point[0] - right_point_2[0]
-                    compensate_line = LineString((right_point_2, (right_point_2[0] + gap, right_point_2[1])))
+                    compensate_line = LineString((right_point_2, (right_point_2[0] + gap + vehicle_length/2, right_point_2[1])))
+                    compensate_line_2 = LineString((right_point, (right_point[0] + vehicle_length/2, right_point[1])))
                     gap2 = 0
                 else:  # right_point[0] < right_point_2[0]
                     gap = right_point_2[0] - right_point[0]
-                    compensate_line = LineString((right_point, (right_point[0] + gap, right_point[1])))
+                    compensate_line = LineString((right_point, (right_point[0] + gap + vehicle_length/2, right_point[1])))
+                    compensate_line_2 = LineString((right_point_2, (right_point_2[0] + vehicle_length/2, right_point_2[1])))
                     gap2 = gap
 
                 # 将标准 弓形 曲线移动到指定的位置
-                temp_bow_line = normalized_bow_curve_right.translate(xoff=right_point[0] + gap2,
+                temp_bow_line = normalized_bow_curve_right.translate(xoff=right_point[0] + gap2 + vehicle_length/2,
                                                                      yoff=right_point[1] + swath_width * (
                                                                                  min_jump_swath + 1))
-                temp_bow_line = gpd.GeoDataFrame(geometry=list(temp_bow_line.geometry) + [compensate_line])
+                temp_bow_line = gpd.GeoDataFrame(geometry=list(temp_bow_line.geometry) + [compensate_line, compensate_line_2])
                 turning_paths.append(temp_bow_line)
 
                 # line_1 = path.geometry.iloc[i]
@@ -1356,19 +1362,23 @@ class CPP_Planner_TurningRail_Maker:
                 if left_point[0] < left_point_2[0]:
                     gap = left_point_2[0] - left_point[0]
                     compensate_line = \
-                        LineString(((left_point[0], left_point_2[1]), (left_point_2[0], left_point_2[1])))
-                    temp_bow_line = normalized_bow_curve_left.translate(xoff=left_point[0], yoff=left_point[1])
+                        LineString(((left_point[0] - vehicle_length/2, left_point_2[1]), (left_point_2[0], left_point_2[1])))
+                    compensate_line_2 = \
+                        LineString(((left_point[0] - vehicle_length/2, left_point[1]), left_point))
+                    temp_bow_line = normalized_bow_curve_left.translate(xoff=left_point[0] - vehicle_length/2, yoff=left_point[1])
                 else:  # left_point[0] > left_point_2[0]
                     gap = left_point[0] - left_point_2[0]
                     compensate_line = \
-                        LineString(((left_point_2[0], left_point[1]), (left_point[0], left_point[1])))
-                    temp_bow_line = normalized_bow_curve_left.translate(xoff=left_point_2[0], yoff=left_point_2[1] + (
+                        LineString(((left_point_2[0] - vehicle_length/2, left_point[1]), (left_point[0], left_point[1])))
+                    compensate_line_2 = \
+                        LineString(((left_point_2[0] - vehicle_length/2, left_point_2[1]), left_point_2))
+                    temp_bow_line = normalized_bow_curve_left.translate(xoff=left_point_2[0] - vehicle_length/2, yoff=left_point_2[1] + (
                                 swath_width * min_jump_swath))
 
                 # 移动 标准弓形曲线
 
                 # temp_bow_line = normalized_bow_curve_left.translate(xoff=left_point[0], yoff=left_point[1])
-                temp_bow_line = gpd.GeoDataFrame(geometry=list(temp_bow_line.geometry) + [compensate_line])
+                temp_bow_line = gpd.GeoDataFrame(geometry=list(temp_bow_line.geometry) + [compensate_line, compensate_line_2])
                 turning_paths.append(temp_bow_line)
                 pass
             elif tillage_method[i] == 3:
