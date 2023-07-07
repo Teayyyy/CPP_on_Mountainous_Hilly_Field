@@ -516,7 +516,7 @@ class CPP_Algorithms:
 
     @staticmethod
     def scanline_algorithm_single_with_headland(land: gpd.GeoDataFrame, step_size: float, along_long_edge=True,
-                                                headland='none', head_land_width=0, min_path_length=5,
+                                                headland='none', head_land_width=0.0, min_path_length=5,
                                                 get_largest_headland=False) -> [gpd.GeoDataFrame, gpd.GeoDataFrame]:
         """
             基于 scanline_algorithm_single_no_turn() 添加了计算地头的功能，通过输入生成地头的方向（由于当前地块被旋转到了水平，而旋转的
@@ -780,7 +780,7 @@ class CPP_Algorithm_Optimizers:
         return path, headland
 
     @staticmethod
-    def gen_path_with_minimum_headland_area_by_edge(land: gpd.GeoDataFrame, step_size: float, head_land_width=6,
+    def gen_path_with_minimum_headland_area_by_edge(land: gpd.GeoDataFrame, step_size: float, head_land_width=6.0,
                                                     headland_mode='left', compare_mode='headland', return_theta=False):
         """
         通过从当前的地块（保证当前的地块形状接近凸边形）的每一条边顺着耕作出发，预留耕作的地头，通过比较顺着各边生成的地头的面积，以及耕作路径的
@@ -1068,13 +1068,13 @@ class CPP_Planner_TurningRail_Maker:
         """
         生成一个 平滑转向 的基本形状，为两个 1/4圆中间连接一根直线的 弓 型
         * 弓 型被标准化到了原点，默认都是较上方的圆弧的点位于原点
-        :param turning_radius:
-        :param min_jump_swaths:
-        :param swath_width:
-        :param side:
-        :param plus:
-        :param degree_step:
-        :return: LineString * 3
+        :param turning_radius: 当前农机的转向半径
+        :param min_jump_swaths: 在当前农机的转向半径下，最小能够够到的下一个垄，这个距离绝不会小于农机耕作半径二倍
+        :param swath_width: 一条垄的宽度
+        :param side: 当前路径的方向，right 表示弓形的弓背朝右，反之亦然
+        :param plus: 是否多计算 plus 条垄，例如原本是 7 垄，plus=1，则跳到第 8 垄
+        :param degree_step: 精度设置
+        :return: gpd.GeoDataFrame
         """
 
         if side == 'right':
@@ -1105,8 +1105,8 @@ class CPP_Planner_TurningRail_Maker:
         生成鱼尾转向
         * 鱼尾 被标准化到了原点，“向下弯曲” 的圆弧的水平段端点位于 (0, 0)
         * 鱼尾转向默认移动到下一条路径，可以通过 plus 调整到另一条路上
-        :param turning_radius:
-        :param swath_width:
+        :param turning_radius: 当前农机的转向半径
+        :param swath_width: 一垄的宽度
         :param side: 鱼尾朝向那一侧，默认右侧 right
         :param degree_step: 精度，建议越高越好
         :param plus: 默认就是移动到下一条，可以设置更大的跨度，例如 plus=1 则移动到下面的第二条
@@ -1140,16 +1140,16 @@ class CPP_Planner_TurningRail_Maker:
     def gen_path_tillage_method(path: gpd.GeoDataFrame, turning_radius: float, vehicle_length: float,
                                 vehicle_width: float, swath_width: float):
         """
-        当采取往复式耕作的时候，判定每一垄的耕作方向，以及下一条垄的位置
+        当采取往复式耕作的时候，判定每一垄的耕作方向，以及下一条垄的位置，常用在 flat turn 这种无法直接通过掉头到达临近下一垄的情况
         * 将田块内的耕作路径抽象为点集合，例如 [0, 0, 0, 0, 0, 0] 因此耕作方向为向右或向左，且分上下
         * 每一垄路径的情况：
             * 0: 使用鱼尾转向
             * 1. 在上方向右到达最近可达垄 + 1垄  2. 在下方到达左侧最近可达垄  3. 在下方向右到达最近可达垄 + 1垄  4.在上方到达右侧最近可达垄
-        :param path:
-        :param turning_radius:
-        :param vehicle_length:
-        :param vehicle_width:
-        :param swath_width:
+        :param path: 当前这片地块内的耕作的垄数
+        :param turning_radius: 农机的转向半径
+        :param vehicle_length: 农机的全长
+        :param vehicle_width: 农机的宽度
+        :param swath_width: 一条垄的宽度
         :return:
         """
         n = len(path)
@@ -1195,19 +1195,20 @@ class CPP_Planner_TurningRail_Maker:
 
         return swath, min_jump_swaths
 
-    @ staticmethod
-    def gen_fishtail_in_paths(line_gdf: gpd.GeoDataFrame, turning_radius: float, swath_width: float, vehicle_length: float,
+    @staticmethod
+    def gen_fishtail_in_paths(line_gdf: gpd.GeoDataFrame, turning_radius: float, swath_width: float,
+                              vehicle_length: float,
                               vehicle_width: float, centroid, theta: float):
         """
-        生成往复式的 fishtail 转向路径
-        :param line_gdf:
-        :param turning_radius:
-        :param swath_width:
-        :param vehicle_length:
-        :param vehicle_width:
-        :param centroid:
-        :param theta
-        :return:
+        生成往复式的 fishtail 转向路径，即往复式耕作，每一调转车头方向的时候，通过 fishtail 的方式调转车头回来
+        :param line_gdf: 地块内路径的 GeoDataFrame
+        :param turning_radius: 农机的转向半径（往往是最小转向半径）
+        :param swath_width: 一垄的宽度
+        :param vehicle_length: 农机全长
+        :param vehicle_width: 农机的宽（最宽处）
+        :param centroid: 当前地块的中心，用于将 “水平旋转的地块” 旋转回原本的角度
+        :param theta: 由原来地块内的角度旋转到水平角度、或从当前的水平角度旋转回原本的角度的值，前者 -theta，后者 theta
+        :return: GeoDataFrame
         """
         fishtail_1 = CPP_Planner_TurningRail_Maker.gen_fishtail_shape_curve(turning_radius, swath_width, 'right')
         fishtail_2 = CPP_Planner_TurningRail_Maker.gen_fishtail_shape_curve(turning_radius, swath_width, 'left')
@@ -1224,17 +1225,23 @@ class CPP_Planner_TurningRail_Maker:
 
                 if right_point[0] > right_point_2[0]:
                     gap = right_point[0] - right_point_2[0]
-                    compensate_line = LineString((right_point_2, (right_point_2[0] + gap + vehicle_length/2, right_point_2[1])))
-                    compensate_line_2 = LineString((right_point, (right_point[0] + vehicle_length/2, right_point[1])))
-                    temp_fishtails = fishtail_1.translate(xoff=right_point[0] + vehicle_length/2, yoff=right_point[1] + swath_width)
+                    compensate_line = LineString(
+                        (right_point_2, (right_point_2[0] + gap + vehicle_length / 2, right_point_2[1])))
+                    compensate_line_2 = LineString((right_point, (right_point[0] + vehicle_length / 2, right_point[1])))
+                    temp_fishtails = fishtail_1.translate(xoff=right_point[0] + vehicle_length / 2,
+                                                          yoff=right_point[1] + swath_width)
                     pass
                 else:  # right_point[0] < right_point_2[0]
                     gap = right_point_2[0] - right_point[0]
-                    compensate_line = LineString((right_point, (right_point[0] + gap + vehicle_length/2, right_point[1])))
-                    compensate_line_2 = LineString((right_point_2, (right_point_2[0] + vehicle_length/2, right_point_2[1])))
-                    temp_fishtails = fishtail_1.translate(xoff=right_point_2[0] + vehicle_length/2, yoff=right_point[1] + swath_width)
+                    compensate_line = LineString(
+                        (right_point, (right_point[0] + gap + vehicle_length / 2, right_point[1])))
+                    compensate_line_2 = LineString(
+                        (right_point_2, (right_point_2[0] + vehicle_length / 2, right_point_2[1])))
+                    temp_fishtails = fishtail_1.translate(xoff=right_point_2[0] + vehicle_length / 2,
+                                                          yoff=right_point[1] + swath_width)
                     pass
-                temp_fishtails = gpd.GeoDataFrame(geometry=list(temp_fishtails.geometry) + [compensate_line, compensate_line_2])
+                temp_fishtails = gpd.GeoDataFrame(
+                    geometry=list(temp_fishtails.geometry) + [compensate_line, compensate_line_2])
                 fishtails.append(temp_fishtails)
                 pass
             else:  # direction == False
@@ -1242,17 +1249,23 @@ class CPP_Planner_TurningRail_Maker:
                 left_point_2 = line_2.coords[0] if line_2.coords[0][0] < line_2.coords[-1][0] else line_2.coords[-1]
                 if left_point[0] < left_point_2[0]:
                     gap = left_point_2[0] - left_point[0]
-                    compensate_line = LineString(((left_point[0] - vehicle_length/2, left_point_2[1]), (left_point_2[0], left_point_2[1])))
-                    compensate_line_2 = LineString((left_point, (left_point[0] - vehicle_length/2, left_point[1])))
-                    temp_fishtails = fishtail_2.translate(xoff=left_point[0] - vehicle_length/2, yoff=left_point[1] + swath_width)
+                    compensate_line = LineString(
+                        ((left_point[0] - vehicle_length / 2, left_point_2[1]), (left_point_2[0], left_point_2[1])))
+                    compensate_line_2 = LineString((left_point, (left_point[0] - vehicle_length / 2, left_point[1])))
+                    temp_fishtails = fishtail_2.translate(xoff=left_point[0] - vehicle_length / 2,
+                                                          yoff=left_point[1] + swath_width)
                 else:  # left_point[0] > left_point_2[0]
                     gap = left_point[0] - left_point_2[0]
-                    compensate_line = LineString(((left_point_2[0] - vehicle_length/2, left_point[1]), (left_point[0], left_point[1])))
-                    compensate_line_2 = LineString((left_point_2, (left_point_2[0] - vehicle_length/2, left_point_2[1])))
-                    temp_fishtails = fishtail_2.translate(xoff=left_point[0] - vehicle_length/2, yoff=left_point[1] + swath_width)
+                    compensate_line = LineString(
+                        ((left_point_2[0] - vehicle_length / 2, left_point[1]), (left_point[0], left_point[1])))
+                    compensate_line_2 = LineString(
+                        (left_point_2, (left_point_2[0] - vehicle_length / 2, left_point_2[1])))
+                    temp_fishtails = fishtail_2.translate(xoff=left_point[0] - vehicle_length / 2,
+                                                          yoff=left_point[1] + swath_width)
 
                 # fishtails.append(temp_fishtails)
-                temp_fishtails = gpd.GeoDataFrame(geometry=list(temp_fishtails.geometry) + [compensate_line, compensate_line_2])
+                temp_fishtails = gpd.GeoDataFrame(
+                    geometry=list(temp_fishtails.geometry) + [compensate_line, compensate_line_2])
                 fishtails.append(temp_fishtails)
                 fishtails.append(gpd.GeoDataFrame(geometry=[compensate_line]))
         return fishtails
@@ -1263,23 +1276,22 @@ class CPP_Planner_TurningRail_Maker:
                                      vehicle_width: float, swath_width: float, centroid, theta: float):
         """
         生成 flat turn 转向 + 鱼尾转向的路径，先处理 flat turn， 再处理鱼尾
+        原则是：首先通过 flat turn 尽量耕作，再对无法通过 flat turn 转到的 垄进行 fishtail 转向
         * 每一垄路径的情况：
             * 0: 使用鱼尾转向
             * 1. 在上方向右到达最近可达垄 + 1垄  2. 在下方到达左侧最近可达垄  3. 在下方向右到达最近可达垄 + 1垄  4.在上方到达右侧最近可达垄
-        :param path:
-        :param turning_radius:
-        :param vehicle_length:
-        :param vehicle_width:
-        :param swath_width:
-        :param centroid:
-        :param theta:
+        :param path: 当前地块内的 垄 LineString
+        :param turning_radius: 农机（最小）转弯半径
+        :param vehicle_length: 农机全长
+        :param vehicle_width: 农机（最宽处）宽度
+        :param swath_width: 一条垄的宽度
+        :param centroid: 当前地块的中心，用于将 “水平旋转的地块” 旋转回原本的角度
+        :param theta: 由原来地块内的角度旋转到水平角度、或从当前的水平角度旋转回原本的角度的值，前者 -theta，后者 theta
         :return:
         """
         # 旋转地块到水平
         path = path.rotate(-theta, origin=centroid)
 
-
-        # TODO: 将农机长度也算在内
         tillage_method, min_jump_swath = CPP_Planner_TurningRail_Maker.gen_path_tillage_method(path, turning_radius,
                                                                                                vehicle_length,
                                                                                                vehicle_width,
@@ -1307,20 +1319,24 @@ class CPP_Planner_TurningRail_Maker:
                 # 确定哪一条线短一点，需要额外移动一段距离才能够得到 弓形 曲线
                 if right_point[0] > right_point_2[0]:
                     gap = right_point[0] - right_point_2[0]
-                    compensate_line = LineString((right_point_2, (right_point_2[0] + gap + vehicle_length/2, right_point_2[1])))
-                    compensate_line_2 = LineString((right_point, (right_point[0] + vehicle_length/2, right_point[1])))
+                    compensate_line = LineString(
+                        (right_point_2, (right_point_2[0] + gap + vehicle_length / 2, right_point_2[1])))
+                    compensate_line_2 = LineString((right_point, (right_point[0] + vehicle_length / 2, right_point[1])))
                     gap2 = 0
                 else:  # right_point[0] < right_point_2[0]
                     gap = right_point_2[0] - right_point[0]
-                    compensate_line = LineString((right_point, (right_point[0] + gap + vehicle_length/2, right_point[1])))
-                    compensate_line_2 = LineString((right_point_2, (right_point_2[0] + vehicle_length/2, right_point_2[1])))
+                    compensate_line = LineString(
+                        (right_point, (right_point[0] + gap + vehicle_length / 2, right_point[1])))
+                    compensate_line_2 = LineString(
+                        (right_point_2, (right_point_2[0] + vehicle_length / 2, right_point_2[1])))
                     gap2 = gap
 
                 # 将标准 弓形 曲线移动到指定的位置
-                temp_bow_line = normalized_bow_curve_right.translate(xoff=right_point[0] + gap2 + vehicle_length/2,
+                temp_bow_line = normalized_bow_curve_right.translate(xoff=right_point[0] + gap2 + vehicle_length / 2,
                                                                      yoff=right_point[1] + swath_width * (
-                                                                                 min_jump_swath + 1))
-                temp_bow_line = gpd.GeoDataFrame(geometry=list(temp_bow_line.geometry) + [compensate_line, compensate_line_2])
+                                                                             min_jump_swath + 1))
+                temp_bow_line = gpd.GeoDataFrame(
+                    geometry=list(temp_bow_line.geometry) + [compensate_line, compensate_line_2])
                 turning_paths.append(temp_bow_line)
 
                 # line_1 = path.geometry.iloc[i]
@@ -1362,23 +1378,28 @@ class CPP_Planner_TurningRail_Maker:
                 if left_point[0] < left_point_2[0]:
                     gap = left_point_2[0] - left_point[0]
                     compensate_line = \
-                        LineString(((left_point[0] - vehicle_length/2, left_point_2[1]), (left_point_2[0], left_point_2[1])))
+                        LineString(
+                            ((left_point[0] - vehicle_length / 2, left_point_2[1]), (left_point_2[0], left_point_2[1])))
                     compensate_line_2 = \
-                        LineString(((left_point[0] - vehicle_length/2, left_point[1]), left_point))
-                    temp_bow_line = normalized_bow_curve_left.translate(xoff=left_point[0] - vehicle_length/2, yoff=left_point[1])
+                        LineString(((left_point[0] - vehicle_length / 2, left_point[1]), left_point))
+                    temp_bow_line = normalized_bow_curve_left.translate(xoff=left_point[0] - vehicle_length / 2,
+                                                                        yoff=left_point[1])
                 else:  # left_point[0] > left_point_2[0]
                     gap = left_point[0] - left_point_2[0]
                     compensate_line = \
-                        LineString(((left_point_2[0] - vehicle_length/2, left_point[1]), (left_point[0], left_point[1])))
+                        LineString(
+                            ((left_point_2[0] - vehicle_length / 2, left_point[1]), (left_point[0], left_point[1])))
                     compensate_line_2 = \
-                        LineString(((left_point_2[0] - vehicle_length/2, left_point_2[1]), left_point_2))
-                    temp_bow_line = normalized_bow_curve_left.translate(xoff=left_point_2[0] - vehicle_length/2, yoff=left_point_2[1] + (
-                                swath_width * min_jump_swath))
+                        LineString(((left_point_2[0] - vehicle_length / 2, left_point_2[1]), left_point_2))
+                    temp_bow_line = normalized_bow_curve_left.translate(xoff=left_point_2[0] - vehicle_length / 2,
+                                                                        yoff=left_point_2[1] + (
+                                                                                swath_width * min_jump_swath))
 
                 # 移动 标准弓形曲线
 
                 # temp_bow_line = normalized_bow_curve_left.translate(xoff=left_point[0], yoff=left_point[1])
-                temp_bow_line = gpd.GeoDataFrame(geometry=list(temp_bow_line.geometry) + [compensate_line, compensate_line_2])
+                temp_bow_line = gpd.GeoDataFrame(
+                    geometry=list(temp_bow_line.geometry) + [compensate_line, compensate_line_2])
                 turning_paths.append(temp_bow_line)
                 pass
             elif tillage_method[i] == 3:
@@ -1423,6 +1444,112 @@ class CPP_Planner_TurningRail_Maker:
             fishtail_paths[i] = fishtail_paths[i].rotate(theta, origin=centroid)
         return turning_paths, fishtail_paths
         pass
+
+    @staticmethod
+    def gen_headland_paths(headland: gpd.GeoDataFrame, swath_width: float, headland_width: float, headland_mode='left',
+                           area_limit=10, tolerance=0.05):
+        """
+        生成地头区域转向路径的测试
+        :param headland:
+        :param swath_width:
+        :param headland_width:
+        :param headland_mode:
+        :param area_limit:
+        :param tolerance:
+        :return:
+        """
+        # 去除面积小于 area_limit 的地头区域
+        headland_poly = headland.geometry[0]
+        headlands = []  # 符合面积规定的 地头区域
+        if type(headland_poly) == Polygon:
+            pass
+        else:  # if type(headland_poly) == MultiPolygon
+            for i in headland_poly.geoms:
+                if i.area > area_limit:
+                    split_headland = CPP_Planner_Kit.split_polygon_by_largest_area(i, tolerance=tolerance)
+                    for single_headland in split_headland:
+                        if single_headland.area > area_limit:
+                            headlands.append(single_headland)
+
+        # 进行地头区域的多边形分割
+        # for i in headlands:
+        #     split_headland = CPP_Planner_Kit.split_polygon_by_largest_area(i, tolerance=0.05)
+
+        all_headland_path = []
+        # 计算地头区域的路径
+        for single_headland in headlands:
+            headland_gdf = gpd.GeoDataFrame(geometry=[single_headland], crs=headland.crs)
+            temp_headland_path, temp_headland_headland = \
+                CPP_Algorithm_Optimizers.gen_path_with_minimum_headland_area_by_edge(
+                    land=headland_gdf, step_size=swath_width, head_land_width=8, headland_mode=headland_mode,
+                    compare_mode='headland', return_theta=False
+                )
+            all_headland_path.append(temp_headland_path)
+
+        return all_headland_path
+        pass
+
+    @staticmethod
+    def combine_headlands_gen_path(headland: list, swath_width: float, headland_width: float,
+                                   headland_mode='left', area_limit=10.0, tolerance=0.05):
+        """
+        将一个完整田块内的所有地头区域，相连的地头进行整合，并再对其进行路径规划
+        * 对于相邻田块的整合，需要使用到缓冲区来进行计算，如果相交则取并集
+        :param headland:
+        :param swath_width:
+        :param headland_width:
+        :param headland_mode:
+        :param area_limit:
+        :param tolerance:
+        :return:
+        """
+        print("Combining headlands in one field...")
+        # 将 headland 中所有的 multipolygon 转换为 polygon
+        single_headlands = []
+        for split_headland in headland:
+            split_headland = split_headland.geometry[0]
+            if type(split_headland) == shapely.MultiPolygon:
+                for single_headland in split_headland.geoms:
+                    if single_headland.area > area_limit:
+                        single_headlands.append(single_headland.simplify(swath_width).buffer(0.1))
+            elif type(split_headland) == shapely.Polygon:
+                if split_headland.area > area_limit:
+                    single_headlands.append(split_headland.simplify(swath_width).buffer(0.1))
+
+        # 对相连的headland进行合并
+        left, right = 0, 1
+        while left < len(single_headlands) - 1:
+            if single_headlands[left].intersects(single_headlands[right]):
+                single_headlands[left] = ops.unary_union([single_headlands[left], single_headlands[right]])
+                del single_headlands[right]
+                left = 0
+                right = 1
+
+            else:  # 没有交集，那么 right 继续向后，或 left 向后
+                right += 1
+                if right == len(single_headlands):
+                    left += 1
+                    right = left + 1
+        # 对所有的地块进行简化
+        split_headlands = []
+        for headland in single_headlands:
+            temp_split_headlands = CPP_Planner_Kit.split_polygon_by_largest_area(headland, tolerance)
+            for split_headland in temp_split_headlands:
+                if split_headland.area > area_limit:
+                    split_headland = gpd.GeoDataFrame(geometry=[split_headland])
+                    split_headlands.append(split_headland)
+
+        headland_paths = []
+        headland_headlands = []
+        # 对筛选、简化 留下的地头区域进行路径规划
+        for split_headland in split_headlands:
+            headland_path, headland_headland = CPP_Algorithm_Optimizers.gen_path_with_minimum_headland_area_by_edge(
+                split_headland, swath_width, headland_width, headland_mode
+            )
+            headland_paths.append(headland_path)
+            headland_headlands.append(headland_headland)
+
+        return headland_paths
 
     """
     * 其他 *
