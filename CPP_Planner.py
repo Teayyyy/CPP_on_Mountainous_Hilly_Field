@@ -612,6 +612,109 @@ class CPP_Algorithms:
         return path_gdf, headland_gdf
 
     @staticmethod
+    def scanline_algorithm_single_with_headland_2(land: gpd.GeoDataFrame, step_size: float, along_long_edge=True,
+                                                  headland='none', head_land_width=0.0, min_path_length=5,
+                                                  get_largest_headland=False) -> [gpd.GeoDataFrame, gpd.GeoDataFrame]:
+        """
+            基于 scanline_algorithm_single_no_turn() 添加了计算地头的功能，通过输入生成地头的方向（由于当前地块被旋转到了水平，而旋转的
+        依据是将长边设置为水平，因此方向为 left, right）来生成对应方向的地头，同时可以控制需要设置的地头宽度
+        * 和原本 scanline 的区别：这一次生成地头的方式，是通过平移地块边界生成
+        :param land: 进行路径规划的地块，最好是简单的多边形，凸边形或是接近凸边形
+        :param step_size: 机械耕作的宽度，即每一根路径的间隔
+        :param along_long_edge: 是否沿着长边进行路径规划，判断长边的依据为当前多边形的最小外接矩形（MABR），否则默认沿着“水平方向”
+        :param headland: 生成地头的方式，有：1. 两侧（both）2. 不生成（none） 3.左侧（left） 4.右侧（right）
+        :param head_land_width: 生成地头的宽度，目前仅能够固定宽度生成地头
+        :param min_path_length: 最小保留的耕作路径长度，默认 5m
+        :param get_largest_headland: 是否获取最大的地头，如果为 True，则会获取最大的地头，否则会获取所有的地头
+        :return: 当前地块的扫描路径，以及地头区域
+        """
+        if len(land) > 1:
+            print("scanline_algorithm_single: 地块超过了一个，当前地块大小：", len(land))
+            return
+
+        # 将 land 中的 polygon 提取出来，保证一次只有一个地块，随即获取相关的信息
+        land_polygon = land.iloc[0].geometry
+        land_centroid = land_polygon.centroid  # 当前地块的原始坐标位置，保存的中心位置，方便后期反向旋转回退
+        if not along_long_edge:
+            land_angle = 0
+        else:
+            land_angle = CPP_Planner_Kit.get_land_MABR_angle(land_polygon)  # 获取角度
+
+        # 置于水平，在后面的路径规划算法中，优先使用该旋转的地块来进行路径规划
+        rotated_polygon = affinity.rotate(land_polygon, -land_angle, origin=land_centroid)
+
+        # 计算多边形的边界框
+        min_x, min_y, max_x, max_y = rotated_polygon.bounds
+
+        # 初始化路径线列表
+        path_lines = []
+        # 地块边缘的点列
+        left_edge_points = []
+        right_edge_points = []
+
+        # 迭代扫描线
+        for y in np.arange(min_y + 0.1, max_y + step_size - 0.1, step_size):
+            # for y in np.arange(min_y, max_y - 1, step_size):
+            row_points = []
+            for i in range(len(rotated_polygon.exterior.coords) - 1):
+                edge = rotated_polygon.exterior.coords[i]
+                next_edge = rotated_polygon.exterior.coords[i + 1]
+                if (edge[1] <= y and next_edge[1] > y) or (next_edge[1] <= y and edge[1] > y):
+                    x = edge[0] + (next_edge[0] - edge[0]) * (y - edge[1]) / (next_edge[1] - edge[1])
+                    row_points.append([x, y])
+
+            # 创建扫描线的 LineString 对象
+            if len(row_points) > 1:
+                # 处理地头，首先找到 x 最小和最大的点的索引，代表当前扫描线的边界
+                min_x_index = min(range(len(row_points)), key=lambda i: row_points[i][0])
+                max_x_index = max(range(len(row_points)), key=lambda i: row_points[i][0])
+                if row_points[max_x_index][0] - row_points[min_x_index][0] > 10:
+                    # 生成地头
+                    if headland == 'left' or headland == 'both':
+                        left_edge_points.append(row_points[min_x_index].copy())
+                        row_points[min_x_index][0] = row_points[min_x_index][0] + head_land_width
+                    if headland == 'right' or headland == 'both':
+                        right_edge_points.append(row_points[max_x_index].copy())
+                        row_points[max_x_index][0] = row_points[max_x_index][0] - head_land_width
+                    path_line = LineString(row_points)
+                    # 尝试：仅保留固定长度以上的耕作路径?
+                    if path_line.length > head_land_width:
+                        path_line = affinity.rotate(path_line, land_angle, origin=land_centroid)
+                        path_lines.append(path_line)
+
+        # 创建 GeoDataFrame 对象
+        path_gdf = gpd.GeoDataFrame(geometry=path_lines, crs=land.crs)
+        # 处理两侧的地头，使用地块边缘平移的方式
+        headland_polygons = []
+        if headland == 'left' or headland == 'both':
+            temp_points = left_edge_points.copy()
+            # 因为前面的扫描线是从下往上迭代的，因此第一个点一定比最后一个点高
+            temp_points[0][1] -= 2
+            temp_points[-1][1] += 2
+            for point in reversed(left_edge_points):
+                temp_points.append([point[0] + head_land_width, point[1]])
+            temp_points[len(left_edge_points)][1] += 2
+            temp_points[-1][1] -= 2
+            headland_polygons.append(Polygon(temp_points))
+
+        if headland == 'right' or headland == 'both':
+            temp_points = right_edge_points.copy()
+            # 原理同上
+            temp_points[0][1] -= 2
+            temp_points[-1][1] += 2
+            for point in reversed(right_edge_points):
+                temp_points.append([point[0] - head_land_width, point[1]])
+            temp_points[len(left_edge_points)][1] += 2
+            temp_points[-1][1] -= 2
+            headland_polygons.append(Polygon(temp_points))
+        headland_polygons = shapely.MultiPolygon(headland_polygons)
+        headland_gdf = gpd.GeoDataFrame(geometry=[headland_polygons], crs=land.crs)
+        # 保证地头区域不越界
+        headland_gdf = headland_gdf.intersection(land)
+        # headland_gdf = land.intersection(headland_gdf)
+        return path_gdf, headland_gdf
+
+    @staticmethod
     def scanline_algorithm_with_headland_by_direction(land: gpd.GeoDataFrame, step_size: float, land_angle,
                                                       headland='none', head_land_width=0, min_path_length=5,
                                                       get_largest_headland=False) -> [gpd.GeoDataFrame,
