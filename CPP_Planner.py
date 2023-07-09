@@ -556,7 +556,8 @@ class CPP_Algorithms:
         path_lines = []
 
         # 迭代扫描线
-        for y in np.arange(min_y + 0.1, max_y + step_size - 0.1, step_size):
+        for y in np.arange(min_y + step_size*0.5, max_y - step_size*0.5, step_size):
+        # for y in np.arange(min_y + 0.1, max_y + step_size - 0.1, step_size):
             # for y in np.arange(min_y, max_y - 1, step_size):
             row_points = []
             for i in range(len(rotated_polygon.exterior.coords) - 1):
@@ -574,9 +575,11 @@ class CPP_Algorithms:
                 if row_points[max_x_index][0] - row_points[min_x_index][0] > 10:
                     # 生成地头
                     if headland == 'left' or headland == 'both':
-                        row_points[min_x_index][0] = row_points[min_x_index][0] + head_land_width
+                        # row_points[min_x_index][0] = row_points[min_x_index][0] + head_land_width
+                        row_points[min_x_index][0] = min(row_points[max_x_index][0], row_points[min_x_index][0] + head_land_width)
                     if headland == 'right' or headland == 'both':
-                        row_points[max_x_index][0] = row_points[max_x_index][0] - head_land_width
+                        # row_points[max_x_index][0] = row_points[max_x_index][0] - head_land_width
+                        row_points[max_x_index][0] = max(row_points[min_x_index][0], row_points[max_x_index][0] - head_land_width)
                     path_line = LineString(row_points)
                     # 尝试：仅保留固定长度以上的耕作路径?
                     if path_line.length > head_land_width:
@@ -591,6 +594,8 @@ class CPP_Algorithms:
         path_buffer_2 = path_gdf.buffer(-(step_size + 0.2), single_sided=True).unary_union
         path_buffer = gpd.GeoDataFrame(geometry=[path_buffer_1, path_buffer_2], crs=land.crs)
         path_area_union = path_buffer.unary_union
+        if path_area_union != None:
+            path_area_union = path_area_union.simplify(step_size * 0.8)
         # path_area_union = Polygon(path_buffer_1.union(path_buffer_2))
         # 目前无法解决锯齿的问题
         # if len(path_gdf.geometry) > 1:
@@ -601,6 +606,9 @@ class CPP_Algorithms:
         # 由于多边形在计算机图形中本身就有误差，因此需要将一些零碎的小块删除，保留最大的作为地块即可
         if type(headland_area) == Polygon:
             headland_area = shapely.MultiPolygon([headland_area])
+        # 将边缘平滑
+        # if headland_area != None:
+        #     headland_area = headland_area.simplify(step_size * 0.7)
         if get_largest_headland:
             headland_area = CPP_Planner_Kit.get_largest_multipolygon(headland_area)
 
@@ -682,11 +690,19 @@ class CPP_Algorithms:
                         path_line = affinity.rotate(path_line, land_angle, origin=land_centroid)
                         path_lines.append(path_line)
 
+        # 测试，添加点
+        if len(left_edge_points) > 1:
+            left_edge_points[0][1] = min_y - 5
+            left_edge_points[-1][1] = max_y + 5
+        if len(right_edge_points) > 1:
+            right_edge_points[0][1] = min_y - 5
+            right_edge_points[-1][1] = max_y + 5
+
         # 创建 GeoDataFrame 对象
         path_gdf = gpd.GeoDataFrame(geometry=path_lines, crs=land.crs)
         # 处理两侧的地头，使用地块边缘平移的方式
         headland_polygons = []
-        if headland == 'left' or headland == 'both':
+        if (headland == 'left' or headland == 'both') and len(left_edge_points) > 0:
             temp_points = left_edge_points.copy()
             # 因为前面的扫描线是从下往上迭代的，因此第一个点一定比最后一个点高
             temp_points[0][1] -= 2
@@ -695,9 +711,11 @@ class CPP_Algorithms:
                 temp_points.append([point[0] + head_land_width, point[1]])
             temp_points[len(left_edge_points)][1] += 2
             temp_points[-1][1] -= 2
-            headland_polygons.append(Polygon(temp_points))
+            temp_points[-1][1] = max(temp_points[-1][1] - 2, temp_points[0][1])
+            if len(temp_points) > 3:
+                headland_polygons.append(Polygon(temp_points))
 
-        if headland == 'right' or headland == 'both':
+        if (headland == 'right' or headland == 'both') and len(left_edge_points) > 0:
             temp_points = right_edge_points.copy()
             # 原理同上
             temp_points[0][1] -= 2
@@ -706,12 +724,13 @@ class CPP_Algorithms:
                 temp_points.append([point[0] - head_land_width, point[1]])
             temp_points[len(left_edge_points)][1] += 2
             temp_points[-1][1] -= 2
-            headland_polygons.append(Polygon(temp_points))
+            temp_points[-1][1] = max(temp_points[-1][1] - 2, temp_points[0][1])
+            if len(temp_points) > 3:
+                headland_polygons.append(Polygon(temp_points))
         headland_polygons = shapely.MultiPolygon(headland_polygons)
         headland_gdf = gpd.GeoDataFrame(geometry=[headland_polygons], crs=land.crs)
         # 保证地头区域不越界
-        headland_gdf = headland_gdf.intersection(land)
-        # headland_gdf = land.intersection(headland_gdf)
+        headland_gdf = headland_gdf.buffer(0.1).simplify(0.5).intersection(land)
         return path_gdf, headland_gdf
 
     @staticmethod
