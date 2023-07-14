@@ -556,8 +556,8 @@ class CPP_Algorithms:
         path_lines = []
 
         # 迭代扫描线
-        for y in np.arange(min_y + step_size*0.5, max_y - step_size*0.5, step_size):
-        # for y in np.arange(min_y + 0.1, max_y + step_size - 0.1, step_size):
+        for y in np.arange(min_y + step_size * 0.5, max_y - step_size * 0.5, step_size):
+            # for y in np.arange(min_y + 0.1, max_y + step_size - 0.1, step_size):
             # for y in np.arange(min_y, max_y - 1, step_size):
             row_points = []
             for i in range(len(rotated_polygon.exterior.coords) - 1):
@@ -576,10 +576,12 @@ class CPP_Algorithms:
                     # 生成地头
                     if headland == 'left' or headland == 'both':
                         # row_points[min_x_index][0] = row_points[min_x_index][0] + head_land_width
-                        row_points[min_x_index][0] = min(row_points[max_x_index][0], row_points[min_x_index][0] + head_land_width)
+                        row_points[min_x_index][0] = min(row_points[max_x_index][0],
+                                                         row_points[min_x_index][0] + head_land_width)
                     if headland == 'right' or headland == 'both':
                         # row_points[max_x_index][0] = row_points[max_x_index][0] - head_land_width
-                        row_points[max_x_index][0] = max(row_points[min_x_index][0], row_points[max_x_index][0] - head_land_width)
+                        row_points[max_x_index][0] = max(row_points[min_x_index][0],
+                                                         row_points[max_x_index][0] - head_land_width)
                     path_line = LineString(row_points)
                     # 尝试：仅保留固定长度以上的耕作路径?
                     if path_line.length > head_land_width:
@@ -732,6 +734,125 @@ class CPP_Algorithms:
         # 保证地头区域不越界
         headland_gdf = headland_gdf.buffer(0.1).simplify(0.5).intersection(land)
         return path_gdf, headland_gdf
+
+    @staticmethod
+    def scanline_algorithm_single_with_headland_3(land: gpd.GeoDataFrame, step_size: float, turning_radius: float,
+                                                  vehicle_length: float, vehicle_width: float,
+                                                  along_long_edge=True, headland='none', head_land_width=0.0,
+                                                  min_path_length=5, get_largest_headland=False
+                                                  ) -> [gpd.GeoDataFrame, gpd.GeoDataFrame]:
+        """
+        这一次的 scanline 算法考虑到了地块的边界角度，能够一定程度上保证转向路径一定在地块内部（长边情况）
+        :param land:
+        :param step_size:
+        :param turning_radius:
+        :param vehicle_length:
+        :param vehicle_width:
+        :param along_long_edge:
+        :param headland:
+        :param head_land_width:
+        :param min_path_length:
+        :param get_largest_headland:
+        :return:
+        """
+        if len(land) > 1:
+            print("scanline_algorithm_single: 地块超过了一个，当前地块大小：", len(land))
+            return
+
+        # 将 land 中的 polygon 提取出来，保证一次只有一个地块，随即获取相关的信息
+        land_polygon = land.iloc[0].geometry
+        land_centroid = land_polygon.centroid  # 当前地块的原始坐标位置，保存的中心位置，方便后期反向旋转回退
+        if not along_long_edge:
+            land_angle = 0
+        else:
+            land_angle = CPP_Planner_Kit.get_land_MABR_angle(land_polygon)  # 获取角度
+
+        # 置于水平，在后面的路径规划算法中，优先使用该旋转的地块来进行路径规划
+        rotated_polygon = affinity.rotate(land_polygon, -land_angle, origin=land_centroid)
+        # 计算一次 flat turn 需要横跨的垄
+        swath_jump = CPP_Planner_TurningRail_Maker.calc_min_swath_jump(turning_radius, step_size)
+        # 计算多边形的边界框
+        min_x, min_y, max_x, max_y = rotated_polygon.bounds
+        path_lines = []
+
+        # 迭代扫描线
+        for y in np.arange(min_y + step_size * 0.5, max_y - step_size * 0.5, step_size):
+            row_points = []
+            for i in range(len(land_polygon.exterior.coords) - 1):
+                edge = land_polygon.exterior.coords[i]
+                next_edge = land_polygon.exterior.coords[i + 1]
+                if (edge[1] <= y and next_edge[1] > y) or (next_edge[1] <= y and edge[1] > y):
+                    x = edge[0] + (next_edge[0] - edge[0]) * (y - edge[1]) / (next_edge[1] - edge[1])
+                    row_points.append([x, y])
+            # 创建扫描线的 LineString 对象
+            if len(row_points) > 1:
+                # 处理地头，首先找到 x 最小和最大的点的索引，代表当前扫描线的边界
+                min_x_index = min(range(len(row_points)), key=lambda i: row_points[i][0])
+                max_x_index = max(range(len(row_points)), key=lambda i: row_points[i][0])
+                # 开始计算 headland_width，分为 左右 两侧各自的
+                left_detector = LineString(((row_points[min_x_index][0] - 0.1, row_points[min_x_index][1]),
+                                            (row_points[min_x_index][0] + 0.1, row_points[min_x_index][1])))
+                right_detector = LineString(((row_points[max_x_index][0] - 0.1, row_points[max_x_index][1]),
+                                             (row_points[max_x_index][0] + 0.1, row_points[max_x_index][1])))
+                left_angle, right_angle = -1, -1
+                # 检测当前扫描线（耕作路径）相交与地块的地块边界
+                for i in range(len(land_polygon.exterior.coords) - 1):
+                    edge = LineString((land_polygon.exterior.coords[i], land_polygon.exterior.coords[i + 1],))
+                    if left_detector.intersects(edge):
+                        left_angle = math.atan2(edge.coords[1][1] - edge.coords[0][1],
+                                                edge.coords[1][0] - edge.coords[0][0])
+                    if right_detector.intersects(edge):
+                        right_angle = math.atan2(edge.coords[1][1] - edge.coords[0][1],
+                                                 edge.coords[1][0] - edge.coords[0][0])
+                # TODO: 计算两侧地头区域的宽度，还有问题
+                left_headland_width = turning_radius * (1 + math.cos(pi - left_angle)) + step_size * swath_jump / 2 + vehicle_length / 2
+                # left_headland_width = (step_size * swath_jump + vehicle_width/2) * abs(1 / math.tan(pi - left_angle)) + turning_radius + vehicle_width / 2
+                right_headland_width = turning_radius * (1 + math.cos(right_angle)) + step_size * swath_jump / 2 + vehicle_length / 2
+                # right_headland_width = (step_size * swath_jump + vehicle_width/2) * abs(1 / math.tan(right_angle)) + turning_radius + vehicle_width / 2
+
+                # print(left_headland_width, "  ", right_headland_width)
+                # print("le an: ", math.degrees(left_angle))
+                # print(abs(1 /math.tan(pi - left_angle)) * (step_size * swath_jump + vehicle_width / 2))
+                # print(1 /math.tan(math.tan(right_angle)))
+
+
+                # 生成地头区域
+                if row_points[max_x_index][0] - row_points[min_x_index][0] > 10:
+                    # 生成地头
+                    if headland == 'left' or headland == 'both':
+                        row_points[min_x_index][0] = min(row_points[max_x_index][0],
+                                                         row_points[min_x_index][0] + left_headland_width)
+                    if headland == 'right' or headland == 'both':
+                        row_points[max_x_index][0] = max(row_points[min_x_index][0],
+                                                         row_points[max_x_index][0] - right_headland_width)
+                    path_line = LineString(row_points)
+                    # 尝试：仅保留固定长度以上的耕作路径?
+                    if path_line.length > max(left_headland_width, right_headland_width):
+                        # path_line = affinity.rotate(path_line, land_angle, origin=land_centroid)
+                        path_lines.append(path_line)
+        path_gdf = gpd.GeoDataFrame(geometry=path_lines, crs=land.crs)
+        # 生成地头区域，通过创建耕作路径的缓冲区，来找到地块的区域，最后通过差集来得到地头区域
+        # print("生成地头区域...")
+        path_buffer_1 = path_gdf.buffer(step_size + 0.2, single_sided=True).unary_union
+        path_buffer_2 = path_gdf.buffer(-(step_size + 0.2), single_sided=True).unary_union
+        path_buffer = gpd.GeoDataFrame(geometry=[path_buffer_1, path_buffer_2], crs=land.crs)
+        path_area_union = path_buffer.unary_union
+        # 将边缘平滑
+        if path_area_union != None:
+            path_area_union = path_area_union.simplify(step_size * 0.8)
+        # path_area_union = Polygon(path_buffer_1.union(path_buffer_2))
+        headland_area = land_polygon.difference(path_area_union)
+        # 由于多边形在计算机图形中本身就有误差，因此需要将一些零碎的小块删除，保留最大的作为地块即可
+        if type(headland_area) == Polygon:
+            headland_area = shapely.MultiPolygon([headland_area])
+
+        # headland_gdf = gpd.GeoDataFrame(geometry=[headland_area.convex_hull], crs=land.crs)
+        headland_gdf = gpd.GeoDataFrame(geometry=[headland_area], crs=land.crs)
+        # 保证当前的地头生成的区域仅在地块内
+        headland_gdf = headland_gdf.intersection(land_polygon)
+        # print("这次规划完成！")
+        return path_gdf, headland_gdf
+        pass
 
     @staticmethod
     def scanline_algorithm_with_headland_by_direction(land: gpd.GeoDataFrame, step_size: float, land_angle,
@@ -903,6 +1024,7 @@ class CPP_Algorithm_Optimizers:
 
     @staticmethod
     def gen_path_with_minimum_headland_area_by_edge(land: gpd.GeoDataFrame, step_size: float, head_land_width=6.0,
+                                                    turning_radius=4.5,
                                                     headland_mode='left', compare_mode='headland', return_theta=False):
         """
         通过从当前的地块（保证当前的地块形状接近凸边形）的每一条边顺着耕作出发，预留耕作的地头，通过比较顺着各边生成的地头的面积，以及耕作路径的
@@ -911,6 +1033,7 @@ class CPP_Algorithm_Optimizers:
         :param land: 进行路径规划的地块，要求为接近 凸边形 的多边形，接近的程度为 tolerance，默认为0.05
         :param step_size: 耕作幅宽，需要根据当前地块所处的平均坡度进行修正
         :param head_land_width: 地头区域的宽度，需要保证机械能够在这里做出想要的例如：掉头、转向等动作
+        :param turning_radius:
         :param headland_mode: 生成地头的模式，可以是 两侧（both），左侧（left），右侧（right）和不生成（none），默认为左侧
         :param compare_mode: 比较的模式，分别为比较路径的长度，和地头的面积（默认）
         :param return_theta: 是否返回最小地块的角度
@@ -940,9 +1063,14 @@ class CPP_Algorithm_Optimizers:
             temp_rotated_polygon = affinity.rotate(land_polygon, -temp_angle, origin='centroid')
             temp_rotated_polygon_regen = gpd.GeoDataFrame(geometry=[temp_rotated_polygon], crs=land.crs)
             # land_centroid = temp_rotated_polygon_regen.centroid[0]
-            temp_path, temp_headland = CPP_Algorithms.scanline_algorithm_single_with_headland(
-                land=temp_rotated_polygon_regen, step_size=step_size, along_long_edge=False,
-                headland=headland_mode, head_land_width=head_land_width, get_largest_headland=False
+            # temp_path, temp_headland = CPP_Algorithms.scanline_algorithm_single_with_headland(
+            #     land=temp_rotated_polygon_regen, step_size=step_size, along_long_edge=False,
+            #     headland=headland_mode, head_land_width=head_land_width, get_largest_headland=False
+            # )
+            # TODO: 添加 vehicle_length / width
+            temp_path, temp_headland = CPP_Algorithms.scanline_algorithm_single_with_headland_3(
+                temp_rotated_polygon_regen, step_size, turning_radius=4.5, vehicle_length=4.5, vehicle_width=1.9,
+                headland=headland_mode, along_long_edge=False
             )
             # 旋转回去
             temp_path = temp_path.rotate(temp_angle, origin=(land_centroid.coords[0][0], land_centroid.coords[0][1]))
@@ -1430,7 +1558,7 @@ class CPP_Planner_TurningRail_Maker:
         # flat turn，注意path是从下到上的，需要翻过来
         for i in range(len(tillage_method)):
             # i = len(tillage_method) - j - 1
-            if tillage_method[i] == 1:
+            if tillage_method[i] == 1 or tillage_method[i] == 3:
                 # 找到需要放置的 swath 点，因为是右侧，所以需要找到 swath 中偏右的点
                 line = path.geometry.iloc[i]
                 line_2 = path.geometry.iloc[i + min_jump_swath + 1]
@@ -1491,7 +1619,7 @@ class CPP_Planner_TurningRail_Maker:
                 # turning_paths.append(padding)
                 # turning_paths.append(curve_2)
                 pass
-            elif tillage_method[i] == 2:
+            elif tillage_method[i] == 2 or tillage_method[i] == 4:
                 line = path.geometry.iloc[i]
                 line_2 = path.geometry.iloc[i - min_jump_swath]
                 left_point = line.coords[0] if line.coords[0][0] < line.coords[-1][0] else line.coords[-1]
@@ -1666,7 +1794,7 @@ class CPP_Planner_TurningRail_Maker:
         # 对筛选、简化 留下的地头区域进行路径规划
         for split_headland in split_headlands:
             headland_path, headland_headland = CPP_Algorithm_Optimizers.gen_path_with_minimum_headland_area_by_edge(
-                split_headland, swath_width, headland_width, headland_mode
+                split_headland, swath_width, headland_width, turning_radius=4.5, headland_mode=headland_mode
             )
             headland_paths.append(headland_path)
             headland_headlands.append(headland_headland)
