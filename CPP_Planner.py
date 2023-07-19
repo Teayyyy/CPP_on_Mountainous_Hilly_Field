@@ -779,6 +779,8 @@ class CPP_Algorithms:
         for y in np.arange(min_y + step_size * 0.5, max_y - step_size * 0.5, step_size):
             row_points = []
             for i in range(len(land_polygon.exterior.coords) - 1):
+                # edge = rotated_polygon.exterior.coords[i]
+                # next_edge = rotated_polygon.exterior.coords[i + 1]
                 edge = land_polygon.exterior.coords[i]
                 next_edge = land_polygon.exterior.coords[i + 1]
                 if (edge[1] <= y and next_edge[1] > y) or (next_edge[1] <= y and edge[1] > y):
@@ -797,18 +799,26 @@ class CPP_Algorithms:
                 left_angle, right_angle = -1, -1
                 # 检测当前扫描线（耕作路径）相交与地块的地块边界
                 for i in range(len(land_polygon.exterior.coords) - 1):
-                    edge = LineString((land_polygon.exterior.coords[i], land_polygon.exterior.coords[i + 1],))
+                    # edge = LineString((land_polygon.exterior.coords[i], land_polygon.exterior.coords[i + 1]))
+                    edge = LineString((rotated_polygon.exterior.coords[i], rotated_polygon.exterior.coords[i + 1]))
                     if left_detector.intersects(edge):
                         left_angle = math.atan2(edge.coords[1][1] - edge.coords[0][1],
                                                 edge.coords[1][0] - edge.coords[0][0])
                     if right_detector.intersects(edge):
-                        right_angle = math.atan2(edge.coords[1][1] - edge.coords[0][1],
-                                                 edge.coords[1][0] - edge.coords[0][0])
-                # TODO: 计算两侧地头区域的宽度，还有问题
-                left_headland_width = turning_radius * (1 + math.cos(pi - left_angle)) + step_size * swath_jump / 2 + vehicle_length / 2
+                        right_angle = math.atan2(edge.coords[0][1] - edge.coords[1][1], edge.coords[0][0] - edge.coords[1][0])
+                    # print('le angle: ', math.degrees(left_angle))
+                    # print('ri angle: ', math.degrees(right_angle))
+                        # right_angle = math.atan2(edge.coords[0][1] - edge.coords[1][1], edge.coords[0][0] - edge.coords[1][0])
+
+                # left_headland_width = turning_radius * (1 + math.cos(pi - left_angle)) + step_size * swath_jump / 2 + vehicle_length / 2
                 # left_headland_width = (step_size * swath_jump + vehicle_width/2) * abs(1 / math.tan(pi - left_angle)) + turning_radius + vehicle_width / 2
-                right_headland_width = turning_radius * (1 + math.cos(right_angle)) + step_size * swath_jump / 2 + vehicle_length / 2
+                # right_headland_width = turning_radius * (1 + math.cos(right_angle)) + step_size * swath_jump / 2 + vehicle_length / 2
                 # right_headland_width = (step_size * swath_jump + vehicle_width/2) * abs(1 / math.tan(right_angle)) + turning_radius + vehicle_width / 2
+                # 这里暂时没加 headland_width
+                left_headland_width = abs(step_size * swath_jump * math.tan(left_angle - pi / 2)) + turning_radius + vehicle_length / 2
+                right_headland_width = abs(step_size * swath_jump * math.tan(right_angle - pi / 2)) + turning_radius + vehicle_length / 2
+                # print('lh wid: ', left_headland_width)
+                # print('rh wid: ', right_headland_width)
 
                 # print(left_headland_width, "  ", right_headland_width)
                 # print("le an: ", math.degrees(left_angle))
@@ -820,11 +830,17 @@ class CPP_Algorithms:
                 if row_points[max_x_index][0] - row_points[min_x_index][0] > 10:
                     # 生成地头
                     if headland == 'left' or headland == 'both':
+                        # row_points[min_x_index][0] = min(row_points[max_x_index][0],
+                        #                                  row_points[min_x_index][0] + left_headland_width)
                         row_points[min_x_index][0] = min(row_points[max_x_index][0],
-                                                         row_points[min_x_index][0] + left_headland_width)
+                                                         min(row_points[min_x_index][0] + left_headland_width,
+                                                             row_points[max_x_index][0]))
                     if headland == 'right' or headland == 'both':
+                        # row_points[max_x_index][0] = max(row_points[min_x_index][0],
+                        #                                  row_points[max_x_index][0] - right_headland_width)
                         row_points[max_x_index][0] = max(row_points[min_x_index][0],
-                                                         row_points[max_x_index][0] - right_headland_width)
+                                                         max(row_points[max_x_index][0] - right_headland_width,
+                                                             row_points[min_x_index][0]))
                     path_line = LineString(row_points)
                     # 尝试：仅保留固定长度以上的耕作路径?
                     if path_line.length > max(left_headland_width, right_headland_width):
@@ -1448,7 +1464,7 @@ class CPP_Planner_TurningRail_Maker:
     @staticmethod
     def gen_fishtail_in_paths(line_gdf: gpd.GeoDataFrame, turning_radius: float, swath_width: float,
                               vehicle_length: float,
-                              vehicle_width: float, centroid, theta: float):
+                              vehicle_width: float, centroid, theta: float, begin_side=1):
         """
         生成往复式的 fishtail 转向路径，即往复式耕作，每一调转车头方向的时候，通过 fishtail 的方式调转车头回来
         :param line_gdf: 地块内路径的 GeoDataFrame
@@ -1458,11 +1474,16 @@ class CPP_Planner_TurningRail_Maker:
         :param vehicle_width: 农机的宽（最宽处）
         :param centroid: 当前地块的中心，用于将 “水平旋转的地块” 旋转回原本的角度
         :param theta: 由原来地块内的角度旋转到水平角度、或从当前的水平角度旋转回原本的角度的值，前者 -theta，后者 theta
+        :param begin_side: 表示当前的鱼尾从哪一边开始，如果为 -1或者1，则左边，2 为右边
         :return: GeoDataFrame
         """
         fishtail_1 = CPP_Planner_TurningRail_Maker.gen_fishtail_shape_curve(turning_radius, swath_width, 'right')
         fishtail_2 = CPP_Planner_TurningRail_Maker.gen_fishtail_shape_curve(turning_radius, swath_width, 'left')
-        direction = False  # true right, false left
+        # 这里通过判断上一个 flat turn 结尾的方向，1 左 2 右
+        if begin_side == 1:
+            direction = True
+        else:
+            direction = False  # true right, false left
         fishtails = []
         for i in range(len(line_gdf) - 1):
             line = line_gdf.geometry.iloc[i]
@@ -1549,16 +1570,22 @@ class CPP_Planner_TurningRail_Maker:
         normalized_bow_curve_right \
             = CPP_Planner_TurningRail_Maker.gen_bow_shape_curve(turning_radius, min_jump_swath, swath_width,
                                                                 'right', 1)
+        normalized_bow_curve_right_2 = CPP_Planner_TurningRail_Maker.gen_bow_shape_curve(turning_radius, min_jump_swath, swath_width,
+                                                                'right', 0)
         normalized_bow_curve_left \
             = CPP_Planner_TurningRail_Maker.gen_bow_shape_curve(turning_radius, min_jump_swath, swath_width,
                                                                 'left', 0)
+        normalized_bow_curve_left_2 \
+            = CPP_Planner_TurningRail_Maker.gen_bow_shape_curve(turning_radius, min_jump_swath, swath_width,
+                                                                'left', 1)
+
         normalized_bow_curve_right.set_crs(path.crs)
         normalized_bow_curve_left.set_crs(path.crs)
         turning_paths = []
         # flat turn，注意path是从下到上的，需要翻过来
         for i in range(len(tillage_method)):
             # i = len(tillage_method) - j - 1
-            if tillage_method[i] == 1 or tillage_method[i] == 3:
+            if tillage_method[i] == 1:
                 # 找到需要放置的 swath 点，因为是右侧，所以需要找到 swath 中偏右的点
                 line = path.geometry.iloc[i]
                 line_2 = path.geometry.iloc[i + min_jump_swath + 1]
@@ -1619,7 +1646,7 @@ class CPP_Planner_TurningRail_Maker:
                 # turning_paths.append(padding)
                 # turning_paths.append(curve_2)
                 pass
-            elif tillage_method[i] == 2 or tillage_method[i] == 4:
+            elif tillage_method[i] == 2:
                 line = path.geometry.iloc[i]
                 line_2 = path.geometry.iloc[i - min_jump_swath]
                 left_point = line.coords[0] if line.coords[0][0] < line.coords[-1][0] else line.coords[-1]
@@ -1653,24 +1680,89 @@ class CPP_Planner_TurningRail_Maker:
                 turning_paths.append(temp_bow_line)
                 pass
             elif tillage_method[i] == 3:
+                line = path.geometry.iloc[i]
+                line_2 = path.geometry.iloc[i + min_jump_swath + 1]
+                left_point = line.coords[0] if line.coords[0][0] < line.coords[-1][0] else line.coords[-1]
+                left_point_2 = line_2.coords[0] if line_2.coords[0][0] < line_2.coords[-1][0] else line_2.coords[-1]
+                if left_point[0] < left_point_2[0]:
+                    gap = left_point_2[0] - left_point[0]
+                    compensate_line = \
+                        LineString(
+                            ((left_point[0] - vehicle_length / 2, left_point[1]), (left_point[0], left_point[1])))
+                    compensate_line_2 = \
+                        LineString(((left_point_2[0] - gap - vehicle_length / 2, left_point_2[1]), left_point_2))
+                    temp_bow_line = normalized_bow_curve_left_2.translate(xoff=left_point[0] - vehicle_length / 2,
+                                                                        yoff=left_point_2[1])
+                else:  # left_point[0] > left_point_2[0]
+                    gap = left_point[0] - left_point_2[0]
+                    compensate_line = \
+                        LineString(
+                            ((left_point_2[0] - vehicle_length / 2, left_point_2[1]), (left_point_2[0], left_point_2[1])))
+                    compensate_line_2 = \
+                        LineString(((left_point[0] - gap - vehicle_length / 2, left_point[1]), left_point))
+                    temp_bow_line = normalized_bow_curve_left_2.translate(xoff=left_point_2[0] - vehicle_length / 2,
+                                                                        yoff=left_point[1] + (
+                                                                                swath_width * (min_jump_swath + 1)))
+                    # 将标准 弓形 曲线移动到指定的位置
+                temp_bow_line = gpd.GeoDataFrame(
+                    geometry=list(temp_bow_line.geometry) + [compensate_line, compensate_line_2])
+                # temp_bow_line = gpd.GeoDataFrame(
+                #     geometry=list(temp_bow_line.geometry) + [compensate_line])
+                turning_paths.append(temp_bow_line)
+
                 pass
             elif tillage_method[i] == 4:
+                line = path.geometry.iloc[i]
+                line_2 = path.geometry.iloc[i - min_jump_swath]
+                right_point = line.coords[0] if line.coords[0][0] > line.coords[-1][0] else line.coords[-1]
+                right_point_2 = line_2.coords[0] if line_2.coords[0][0] > line_2.coords[-1][0] else line_2.coords[-1]
+
+                # 确定哪一条线短一点，需要额外移动一段距离才能够得到 弓形 曲线
+                if right_point[0] > right_point_2[0]:
+                    gap = right_point[0] - right_point_2[0]
+                    compensate_line = LineString(
+                        (right_point_2, (right_point_2[0] + gap + vehicle_length / 2, right_point_2[1])))
+                    compensate_line_2 = LineString((right_point, (right_point[0] + vehicle_length / 2, right_point[1])))
+                    gap2 = 0
+                else:  # right_point[0] < right_point_2[0]
+                    gap = right_point_2[0] - right_point[0]
+                    compensate_line = LineString(
+                        (right_point, (right_point[0] + gap + vehicle_length / 2, right_point[1])))
+                    compensate_line_2 = LineString(
+                        (right_point_2, (right_point_2[0] + vehicle_length / 2, right_point_2[1])))
+                    gap2 = gap
+
+                # 将标准 弓形 曲线移动到指定的位置
+                temp_bow_line = normalized_bow_curve_right_2.translate(xoff=right_point[0] + gap2 + vehicle_length / 2,
+                                                                     yoff=right_point_2[1] + swath_width * (
+                                                                             min_jump_swath))
+                temp_bow_line = gpd.GeoDataFrame(
+                    geometry=list(temp_bow_line.geometry) + [compensate_line, compensate_line_2])
+                turning_paths.append(temp_bow_line)
                 pass
 
         # fishtail turn
         begin = -1  # 记录0开始的位置
         temp_paths = []
         fishtail_paths = []
+        begin_side = -1  # 记录开始的方向，这是根据前面的 flat turn 的方向来，如果为 2、4，则从左边开始，1、3从右，begin_side 的值1左2右
         print(tillage_method)
         for i in range(len(tillage_method)):
             if tillage_method[i] == 0:
                 temp_paths.append(path.geometry.iloc[i])
+                # 判断前一个路径的方向
+                if begin_side == -1 and i - 1 >= 0:
+                    if tillage_method[i - 1] == 2 or tillage_method[i - 1] == 4:
+                        begin_side = 1
+                    else:
+                        begin_side = 2
             else:
                 if len(temp_paths) > 1:
                     temp_fishtails = CPP_Planner_TurningRail_Maker.gen_fishtail_in_paths(gpd.GeoDataFrame(
                         geometry=temp_paths, crs=path.crs), turning_radius, swath_width, vehicle_length, vehicle_width,
-                        centroid, theta
+                        centroid, theta, begin_side=begin_side
                     )
+                    begin_side = -1
                     # fishtail_paths.append(temp_fishtails)
                     # 因为这里返回的 fishtails 就是 gdf
                     fishtail_paths += temp_fishtails
@@ -1681,7 +1773,7 @@ class CPP_Planner_TurningRail_Maker:
         if len(temp_paths) > 1:
             temp_fishtails = CPP_Planner_TurningRail_Maker.gen_fishtail_in_paths(gpd.GeoDataFrame(
                 geometry=temp_paths, crs=path.crs), turning_radius, swath_width, vehicle_length, vehicle_width,
-                centroid, theta
+                centroid, theta, begin_side=begin_side
             )
             # fishtail_paths.append(temp_fishtails)
             # 因为这里返回的 fishtails 就是 gdf
