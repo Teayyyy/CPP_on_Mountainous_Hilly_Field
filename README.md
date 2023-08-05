@@ -4,6 +4,7 @@
 * 计算当前 .shp 文件下所有田块的路径 Compute_All_Land_Path.py
   * .shp 文件要求：保证所有的 .shp 文件在使用前保持仅包含地块的区域信息（若是需要考虑地块道路的信息，后续开发）
   * 文件会保存在当前 py 文件目录下的 Saved_Result/CPP_{time}.pdf，time为当前时间
+* 通过 Neural Network 对真实路径进行模拟，修正生成的路径：pathline_real_modeling
 
 
 ### 尚未完成 （大功能）
@@ -22,13 +23,13 @@
     TODO: 7.1 地头部分超过了地块本身，需要进行修正 -- done: using gpd.intersection(land)
     TODO: 7.2 对地头区域再次规划路径
         TODO: 7.2.1 地头部分转向路径和在其上再次耕作的区域重合了，如何显示？
-#### TODO: 8. 考虑到坡度是斜面，因此直接取 xy 坐标会使得地块的面积变小，需要进行修正
+#### TODO: 8. 考虑到坡度是斜面，因此直接取 xy 坐标会使得地块的面积变小，需要进行修正 -- 论文
 #### TODO: 9. 顺着子块的边进行耕作，找到这些边耕地中，地头区域占据最小的边 -- done
-#### TODO: 10. 根据实际情况（耕地的照片），做对比
+#### TODO: 10. 根据实际情况（耕地的照片），做对比 -- temp_doing: pathline_real_modeling
 
 ### 尚未完成 （小功能）
 #### TODO: 1. 添加上道路信息、道路宽度等
-#### TODO: 2. 转向考虑Dubins path以及另一个path
+#### TODO: 2. 转向考虑Dubins path以及另一个path -- 通过 spline 曲线，可以借由优化后的 path 生成更加光滑连续的曲线
 
 
 在进行路径规划时，您需要考虑以下参数和要求：
