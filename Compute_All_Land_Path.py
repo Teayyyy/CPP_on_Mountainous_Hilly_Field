@@ -168,7 +168,8 @@ def get_all_land_with_min_headland_2(swath_width, head_land_width=6):
 
 def get_all_land_with_min_headland_edge(swath_width, head_land_width=6):
     # 通过计算最小边来获得路径
-    all_land = CPP_Planner_Kit.load_fields('Scratch/test_Load_Shp/shp_file/村1地_全区.shp')
+    # all_land = CPP_Planner_Kit.load_fields('Scratch/test_Load_Shp/shp_file/村1地_全区.shp')
+    all_land = CPP_Planner_Kit.load_fields('Scratch/test_Load_Shp/shp_file/村地和道路/村地地块区域.shp')
     num_land = len(all_land)
     print("田块的个数: ", num_land)
 
@@ -205,6 +206,11 @@ def get_all_land_with_min_headland_edge(swath_width, head_land_width=6):
     # plt.show()
     now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     plt.savefig('Saved_Result/CPP_min_edge_{}.pdf'.format(now))
+    # 保存为 shp 文件，在试验阶段，就保存前两个
+    # temp_headland_1 = all_land_path[0]
+    # temp_headland_1.to_file('Saved_Result/shp_land_1.shp')
+    # temp_headland_2 = all_land_path[1]
+    # temp_headland_2.to_file('Saved_Result/shp_land_2.shp')
     print("Saving Name: ", 'CPP_min_edge_{}.pdf'.format(now))
 
 
@@ -370,6 +376,8 @@ def get_all_land_with_min_headland_edge_with_headland_path(swath_width):
     all_flat_turns = []
     all_fishtail_turns = []
     for index in range(num_land):
+        if index == 4:
+            continue
         print("Land no: ", index + 1)
         slope = mean_slope[index]
         temp_corrected_swath_length = CPP_Planner_Kit.get_corrected_swath_width(swath_width, slope)
@@ -408,7 +416,94 @@ def get_all_land_with_min_headland_edge_with_headland_path(swath_width):
                 all_headland.append(temp_headland)
 
         headland_width_oneside, _ = CPP_Planner_Kit.calc_headland_width(turning_radius, swath_width, vehicle_length,
-                                                                     vehicle_width, buffer=0.2)
+                                                                        vehicle_width, buffer=0.2)
+        all_headland_path += CPP_Planner_TurningRail_Maker.combine_headlands_gen_path(
+            temp_headlands, swath_width, headland_width=headland_width_oneside, headland_mode='none', area_limit=20
+        )
+
+    # 显示所有的地头和路径在地块内，或保存
+    _, ax = plt.subplots()
+    exte = all_land.exterior
+    exte.plot(ax=ax, color='b', linewidth=0.3)
+    for path in all_land_path:
+        path.plot(ax=ax, color='y', linewidth=0.2)
+    for headland in all_headland:
+        headland.plot(ax=ax, color='gray')
+    for fishtail_turn in all_fishtail_turns:
+        fishtail_turn.plot(ax=ax, color='g', linewidth=0.1)
+    for flat_turn in all_flat_turns:
+        flat_turn.plot(ax=ax, color='black', linewidth=0.1)
+    for temp_headlands in all_headland_path:
+        temp_headlands.plot(ax=ax, color='y', linewidth=0.1)
+
+    # plt.show()
+    now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    plt.savefig('Saved_Result/CPP_min_edge_turning_{}.pdf'.format(now))
+    print("Saving Name: ", 'CPP_min_edge_fishtail_flatturn_headland_path{}.pdf'.format(now))
+    pass
+
+
+# 测试通过地头平移的方式生成
+def get_all_land_with_min_headland_edge_with_headland_path_translate_gen(swath_width):
+    # get_all_land_with_min_headland_edge_with_flat_fishtail_turnings
+    turning_radius = 4.5
+    # vehicle_length = 6.3
+    vehicle_length = 4.5
+    vehicle_width = 1.9
+    headland_width, vehicle_theta = CPP_Planner_Kit.calc_headland_width(turning_radius, swath_width, vehicle_length,
+                                                                        vehicle_width,
+                                                                        buffer=0.3, show_info=True)
+
+    # all_land = CPP_Planner_Kit.load_fields('Scratch/test_Load_Shp/shp_file/村1地_全区.shp')
+    all_land = CPP_Planner_Kit.load_fields('Scratch/test_Load_Shp/shp_file/村地和道路/村地地块区域.shp')
+    num_land = len(all_land)
+    print("田块的个数: ", num_land)
+
+    all_land_path = []
+    all_headland = []
+    all_headland_path = []
+    all_flat_turns = []
+    all_fishtail_turns = []
+    for index in range(num_land):
+        print("Land no: ", index + 1)
+        slope = mean_slope[index]
+        temp_corrected_swath_length = CPP_Planner_Kit.get_corrected_swath_width(swath_width, slope)
+        single_land = CPP_Planner_Kit.get_single_shp(all_land, index)
+        # 分割田块为简单的多边形
+        split_polygon = CPP_Planner_Kit.split_polygon_by_largest_area(single_land.geometry.iloc[0], tolerance=0.05)
+        # 对分割的每一个多边形进行路径规划，这一次使用的是从多边形的每一边开始顺着边开始计算路径，找到各边中地头占据面积最小的区域
+        temp_headlands = []
+        for polygon in split_polygon:
+            if polygon.area > 20:
+                # 计算当前多边形的每一条边，顺着进行路径规划，找到地头占据面积最小的那一条边
+                polygon_regen = gpd.GeoDataFrame(geometry=[polygon], crs=all_land.crs)
+                polygon_centroid = polygon_regen.centroid[0]
+                temp_path, temp_headland, theta = CPP_Algorithm_Optimizers.gen_path_with_minimum_headland_area_by_edge(
+                    land=polygon_regen, step_size=temp_corrected_swath_length, head_land_width=headland_width,
+                    headland_mode='both', compare_mode='headland', return_theta=True, turning_radius=turning_radius
+                )
+                print(theta)
+
+                # 计算地头的转向等路径
+                if temp_headland.geometry[0] != None:
+                    temp_headlands.append(temp_headland)
+                    # all_land_path += CPP_Planner_TurningRail_Maker.gen_headland_paths(temp_headland, swath_width,
+                    #                                                                   headland_width, area_limit=7)
+                    # all_headland_path += CPP_Planner_TurningRail_Maker.combine_headlands_gen_path(
+                    #     temp_headland, swath_width, headland_width, 'none', area_limit=20
+                    # )
+
+                flat_turn_paths, fishtail_paths = CPP_Planner_TurningRail_Maker.gen_path_flat_turn_tail_turn(
+                    temp_path, turning_radius, vehicle_length, vehicle_width, swath_width, polygon_centroid, theta
+                )
+                all_flat_turns += flat_turn_paths
+                all_fishtail_turns += fishtail_paths
+
+                all_land_path.append(temp_path)
+                all_headland.append(temp_headland)
+
+        headland_width_oneside, _ = CPP_Planner_Kit.calc_headland_width(turning_radius, swath_width, vehicle_length,
+                                                                        vehicle_width, buffer=0.2)
         all_headland_path += CPP_Planner_TurningRail_Maker.combine_headlands_gen_path(
             temp_headlands, swath_width, headland_width=headland_width_oneside, headland_mode='none', area_limit=20
         )
@@ -440,7 +535,8 @@ def get_all_land_with_min_headland_edge_with_headland_path(swath_width):
 # get_all_land_path_with_headland(swath_width=1.45, along_long_edge=True, headland_mode='left', head_land_width=6)
 # get_all_land_path_with_min_headland(swath_width=1.45, along_long_edge=True, head_land_width=6)
 # get_all_land_with_min_headland_2(swath_width=1.45, head_land_width=6)
-# get_all_land_with_min_headland_edge(swath_width=1.45, head_land_width=6)
+
+get_all_land_with_min_headland_edge(swath_width=1.45, head_land_width=6)
 # get_all_land_with_min_headland_edge_with_turnings(1.45)
 # get_all_land_with_min_headland_edge_with_flat_fishtail_turnings(1.45)
-get_all_land_with_min_headland_edge_with_headland_path(1.45)
+# get_all_land_with_min_headland_edge_with_headland_path(1.45)

@@ -2,4 +2,5 @@
 /.DS_Store
 /Saved_Result/
 /Scratch/test_Load_Shp/DEM_Slope/
-
+/pathline_real_modeling/GIS_data
+/PSO_opt_result/

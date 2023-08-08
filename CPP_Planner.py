@@ -1088,7 +1088,12 @@ class CPP_Algorithm_Optimizers:
                 temp_rotated_polygon_regen, step_size, turning_radius=4.5, vehicle_length=4.5, vehicle_width=1.9,
                 headland=headland_mode, along_long_edge=False
             )
-            # 旋转回去
+
+            # temp_path, temp_headland = CPP_Algorithms.scanline_algorithm_single_with_headland_2(temp_rotated_polygon_regen,
+            #                                                                                     step_size, headland='right',
+            #                                                                                     along_long_edge=True,
+            #                                                                                     head_land_width=head_land_width)
+            # # 旋转回去
             temp_path = temp_path.rotate(temp_angle, origin=(land_centroid.coords[0][0], land_centroid.coords[0][1]))
             temp_headland = temp_headland.rotate(temp_angle,
                                                  origin=(land_centroid.coords[0][0], land_centroid.coords[0][1]))
