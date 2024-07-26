@@ -4,3 +4,7 @@
 /Scratch/test_Load_Shp/DEM_Slope/
 /pathline_real_modeling/GIS_data
 /PSO_opt_result/
+/pathline_real_modeling/*.csv
+/PSO_APF_analysis/
+/pathline_real_modeling/swath_simu.png
+/pathline_real_modeling/sep_land_datas/

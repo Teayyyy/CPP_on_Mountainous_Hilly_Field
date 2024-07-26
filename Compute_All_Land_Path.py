@@ -1,3 +1,4 @@
+import pandas as jpd
 import shapely
 
 from CPP_Planner import CPP_Planner_Kit, CPP_Algorithms, CPP_Algorithm_Optimizers, CPP_Planner_TurningRail_Maker
@@ -6,6 +7,7 @@ import matplotlib.pyplot as plt
 import geopandas as gpd
 import datetime
 import warnings
+import numpy as np
 
 """
 用来一次性规划所有地块的路径规划，并显示到图上
@@ -18,6 +20,7 @@ mean_slope = [3.37, 7.38, 6.07, 3.94, 6.53, 7.46, 7.62]
 
 def get_all_land_path():
     all_land = CPP_Planner_Kit.load_fields('Scratch/test_Load_Shp/shp_file/村1地_全区.shp')
+    # all_land = CPP_Planner_Kit.load_fields('Scratch/test_Load_Shp/shp_file/村地和道路/村地地块区域.shp')
     num_land = len(all_land)
     print("田块的个数: ", num_land)
 
@@ -222,11 +225,13 @@ def get_all_land_with_min_headland_edge_with_turnings(swath_width):
                                                                         vehicle_width,
                                                                         buffer=0.3, show_info=True)
 
-    all_land = CPP_Planner_Kit.load_fields('Scratch/test_Load_Shp/shp_file/村1地_全区.shp')
+    # all_land = CPP_Planner_Kit.load_fields('Scratch/test_Load_Shp/shp_file/村1地_全区.shp')
+    all_land = CPP_Planner_Kit.load_fields('Scratch/test_Load_Shp/shp_file/村地和道路/村地地块区域.shp')
     num_land = len(all_land)
     print("田块的个数: ", num_land)
 
     all_land_path = []
+    all_land_lines = []
     all_headland = []
     all_headland_move = []
     all_turning_curves = []
@@ -260,6 +265,7 @@ def get_all_land_with_min_headland_edge_with_turnings(swath_width):
                 all_turning_curves.append(turning_curves)
                 all_backward_moves.append(backward_moves)
                 all_land_path.append(temp_path)
+                # all_land_lines += temp_path.geometry
                 all_headland.append(temp_headland)
 
     # 显示所有的地头和路径在地块内，或保存
@@ -277,9 +283,12 @@ def get_all_land_with_min_headland_edge_with_turnings(swath_width):
     for backward_line in all_backward_moves:
         backward_line.plot(ax=ax, color='green', linewidth=0.1)
 
+    # saving results for all_land_path
+    all_land_lines_gdf = pd.concat(all_land_path[:2])
+    all_land_lines_gdf.to_file(r'gen_paths/gen_01.shp')
     # plt.show()
     now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    plt.savefig('Saved_Result/CPP_min_edge_turning_{}.pdf'.format(now))
+    # plt.savefig('Saved_Result/CPP_min_edge_turning_{}.pdf'.format(now))
     print("Saving Name: ", 'CPP_min_edge_turning_{}.pdf'.format(now))
     pass
 
@@ -538,5 +547,6 @@ def get_all_land_with_min_headland_edge_with_headland_path_translate_gen(swath_w
 
 get_all_land_with_min_headland_edge(swath_width=1.45, head_land_width=6)
 # get_all_land_with_min_headland_edge_with_turnings(1.45)
+
 # get_all_land_with_min_headland_edge_with_flat_fishtail_turnings(1.45)
 # get_all_land_with_min_headland_edge_with_headland_path(1.45)

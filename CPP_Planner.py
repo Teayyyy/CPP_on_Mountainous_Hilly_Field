@@ -1054,6 +1054,7 @@ class CPP_Algorithm_Optimizers:
         :param compare_mode: 比较的模式，分别为比较路径的长度，和地头的面积（默认）
         :param return_theta: 是否返回最小地块的角度
         :return: 规划完成的路径和地头区域，保证输出的地头区域为当前情况下的最优值
+        *** 需要注意的是，记得选择 不同的 scanline_algorithm_single_with_headland_* 来针对不同的算法要求
         """
         land_polygon = land.geometry.iloc[0]
         # 获取当前多边形的中心点，方便后期旋转回原来的角度
@@ -1079,15 +1080,15 @@ class CPP_Algorithm_Optimizers:
             temp_rotated_polygon = affinity.rotate(land_polygon, -temp_angle, origin='centroid')
             temp_rotated_polygon_regen = gpd.GeoDataFrame(geometry=[temp_rotated_polygon], crs=land.crs)
             # land_centroid = temp_rotated_polygon_regen.centroid[0]
-            # temp_path, temp_headland = CPP_Algorithms.scanline_algorithm_single_with_headland(
-            #     land=temp_rotated_polygon_regen, step_size=step_size, along_long_edge=False,
-            #     headland=headland_mode, head_land_width=head_land_width, get_largest_headland=False
-            # )
-            # TODO: 添加 vehicle_length / width
-            temp_path, temp_headland = CPP_Algorithms.scanline_algorithm_single_with_headland_3(
-                temp_rotated_polygon_regen, step_size, turning_radius=4.5, vehicle_length=4.5, vehicle_width=1.9,
-                headland=headland_mode, along_long_edge=False
+            temp_path, temp_headland = CPP_Algorithms.scanline_algorithm_single_with_headland(
+                land=temp_rotated_polygon_regen, step_size=step_size, along_long_edge=False,
+                headland=headland_mode, head_land_width=head_land_width, get_largest_headland=False
             )
+            # 这个算法计算了转向时地头边缘角度对地头宽度的影响
+            # temp_path, temp_headland = CPP_Algorithms.scanline_algorithm_single_with_headland_3(
+            #     temp_rotated_polygon_regen, step_size, turning_radius=4.5, vehicle_length=4.5, vehicle_width=1.9,
+            #     headland=headland_mode, along_long_edge=False
+            # )
 
             # temp_path, temp_headland = CPP_Algorithms.scanline_algorithm_single_with_headland_2(temp_rotated_polygon_regen,
             #                                                                                     step_size, headland='right',
